@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Physics 藥物優化平台 | v2.0 Real Data</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:#0f1117; --card:#1a1d2e; --card2:#222538; --border:#2d3154;
+  --accent:#6366f1; --green:#10b981; --yellow:#f59e0b; --red:#ef4444;
+  --text:#e2e8f0; --muted:#94a3b8;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+
+/* Header */
+.header{background:linear-gradient(135deg,#1e1b4b,#0f172a 50%,#064e3b);padding:16px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;}
+.header-title{font-size:1.3rem;font-weight:700;background:linear-gradient(90deg,#818cf8,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.header-sub{font-size:0.78rem;color:var(--muted);margin-top:2px;}
+.badge{background:rgba(99,102,241,.2);border:1px solid #6366f1;color:#818cf8;border-radius:20px;padding:2px 9px;font-size:.72rem;}
+.badge-green{background:rgba(16,185,129,.2);border-color:#10b981;color:#34d399;}
+#db-status{font-size:.75rem;color:var(--muted);}
+
+/* Nav */
+.nav{display:flex;background:var(--card);border-bottom:1px solid var(--border);overflow-x:auto;padding:0 20px;}
+.nav-tab{padding:13px 18px;cursor:pointer;font-size:.85rem;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .2s;user-select:none;}
+.nav-tab:hover{color:var(--text);}
+.nav-tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600;}
+
+/* Layout */
+.container{padding:20px;max-width:1400px;margin:0 auto;}
+.page{display:none;}.page.active{display:block;}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px;}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:18px;}
+@media(max-width:900px){.grid-2,.grid-3{grid-template-columns:1fr;}}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;}
+.card-title{font-size:.92rem;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+
+/* Stats */
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px;}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
+.stat-val{font-size:1.8rem;font-weight:700;}.stat-lbl{font-size:.75rem;color:var(--muted);margin-top:3px;}
+
+/* Form */
+.form-group{margin-bottom:14px;}
+label{display:block;font-size:.82rem;color:var(--muted);margin-bottom:5px;font-weight:500;}
+input,select,textarea{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 12px;font-size:.85rem;outline:none;transition:border .2s;}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);}
+textarea{font-family:monospace;resize:vertical;min-height:90px;line-height:1.5;}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 20px;border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:600;border:none;transition:all .2s;}
+.btn-primary{background:var(--accent);color:#fff;}
+.btn-primary:hover{background:#4f46e5;}
+.btn-primary:disabled{background:#374151;cursor:not-allowed;opacity:.6;}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--muted);}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent);}
+.btn-sm{padding:5px 12px;font-size:.78rem;}
+
+/* Progress */
+.progress-wrap{margin:16px 0;display:none;}
+.progress-label{font-size:.82rem;color:var(--muted);margin-bottom:6px;display:flex;justify-content:space-between;}
+.progress-bar{height:8px;background:var(--card2);border-radius:4px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,#6366f1,#10b981);border-radius:4px;transition:width .4s ease;width:0%;}
+.log-box{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:monospace;font-size:.78rem;color:#34d399;max-height:140px;overflow-y:auto;margin-top:10px;}
+
+/* Pills */
+.pill{display:inline-block;padding:2px 7px;border-radius:10px;font-size:.7rem;font-weight:600;}
+.pill-green{background:rgba(16,185,129,.2);color:#34d399;}
+.pill-red{background:rgba(239,68,68,.2);color:#f87171;}
+.pill-yellow{background:rgba(245,158,11,.2);color:#fbbf24;}
+.pill-blue{background:rgba(99,102,241,.2);color:#818cf8;}
+.pill-gray{background:rgba(148,163,184,.15);color:#94a3b8;}
+
+/* Table */
+.tbl-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border);max-height:440px;overflow-y:auto;}
+.tbl-wrap::-webkit-scrollbar{width:5px;height:5px;}
+.tbl-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+table{width:100%;border-collapse:collapse;font-size:.8rem;}
+th{background:var(--card2);padding:10px 12px;text-align:left;color:var(--muted);font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:1;}
+td{padding:8px 12px;border-bottom:1px solid rgba(45,49,84,.4);vertical-align:middle;}
+tr:hover td{background:rgba(255,255,255,.03);}
+
+/* Charts */
+.chart-wrap{position:relative;height:260px;}
+.chart-wrap-lg{position:relative;height:340px;}
+.chart-wrap-sm{position:relative;height:200px;}
+
+/* Legend */
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:.77rem;color:var(--muted);}
+.ldot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;}
+
+/* Alert */
+.alert{padding:12px 16px;border-radius:8px;font-size:.83rem;margin-bottom:14px;}
+.alert-error{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;}
+.alert-info{background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.3);color:#818cf8;}
+.alert-success{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:#34d399;}
+
+/* SKEMPI info */
+.evidence-box{background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.25);border-radius:8px;padding:12px;font-size:.8rem;}
+.evidence-box .ev-count{font-size:1.4rem;font-weight:700;color:#34d399;}
+
+/* Sequence display */
+.seq-display{font-family:monospace;font-size:.78rem;background:var(--card2);padding:10px 12px;border-radius:6px;word-break:break-all;line-height:1.8;border:1px solid var(--border);}
+.seq-display .hs{background:rgba(239,68,68,.3);border-radius:2px;padding:1px 0;}
+
+/* Hotspot bar */
+.hs-bar{height:22px;background:var(--card2);border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.hs-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:.7rem;font-weight:600;}
+
+/* Info row */
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(45,49,84,.4);font-size:.8rem;}
+.info-row:last-child{border-bottom:none;}
+
+/* PDB search */
+.search-input-wrap{display:flex;gap:8px;margin-bottom:14px;}
+.search-input-wrap input{flex:1;}
+
+/* Animations */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#818cf8;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+
+/* Preset sequences */
+.preset-btn{background:var(--card2);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:.75rem;cursor:pointer;transition:all .2s;margin:2px;}
+.preset-btn:hover{border-color:var(--accent);color:var(--accent);}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-title">🧬 AI-Physics 混合藥物優化平台</div>
+    <div class="header-sub">Real SKEMPI 2.0 Data · 7,085 Mutations · 345 PDB Structures · SQLite Backend</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <span class="badge">SKEMPI 2.0 真實資料</span>
+    <span class="badge badge-green" id="db-live">⚡ 連線中...</span>
+    <span id="db-status"></span>
+  </div>
+</div>
+
+<div class="nav">
+  <div class="nav-tab active" onclick="showPage('optimize',this)">🚀 優化分析</div>
+  <div class="nav-tab" onclick="showPage('results',this)">📊 優化結果</div>
+  <div class="nav-tab" onclick="showPage('skempi',this)">🔬 SKEMPI 資料庫</div>
+  <div class="nav-tab" onclick="showPage('history',this)">📋 歷史記錄</div>
+  <div class="nav-tab" onclick="showPage('overview',this)">🏗️ 系統架構</div>
+</div>
+
+<div class="container">
+
+<!-- ======= PAGE: OPTIMIZE ======= -->
+<div class="page active" id="page-optimize">
+  <div class="grid-2">
+    <!-- Input panel -->
+    <div class="card">
+      <div class="card-title">🧬 蛋白質序列輸入</div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:6px;">快速載入範例序列：</div>
+        <button class="preset-btn" onclick="loadPreset('barnase')">Barnase (110 aa)</button>
+        <button class="preset-btn" onclick="loadPreset('eglin')">Eglin c (63 aa)</button>
+        <button class="preset-btn" onclick="loadPreset('il2')">IL-2 Fragment (50 aa)</button>
+        <button class="preset-btn" onclick="loadPreset('insulin')">Insulin A-chain</button>
+        <button class="preset-btn" onclick="loadPreset('custom')">自訂範例</button>
+      </div>
+
+      <div class="form-group">
+        <label>藥物/蛋白質名稱</label>
+        <input type="text" id="inp-name" placeholder="e.g. Anti-IL6R Nanobody" value="Barnase">
+      </div>
+      <div class="form-group">
+        <label>結合標靶</label>
+        <input type="text" id="inp-target" placeholder="e.g. IL-6 Receptor" value="Barstar">
+      </div>
+      <div class="form-group">
+        <label>蛋白質/胜肽序列（單字母代碼）</label>
+        <textarea id="inp-seq" placeholder="AQVINTFDGVADYLQ...">AQVINTFDGVADYLQTYHKLPDNYITKSEAQALGWVASKGNLADVAPGKSIGGDIFSNREGKLPGKSGRTWREADINYTSGFRNSDRILYSSDWLIYKTTDHYQTFTKIR</textarea>
+        <div style="font-size:.72rem;color:var(--muted);margin-top:4px;" id="seq-len-display">序列長度：108 aa</div>
+      </div>
+      <div class="form-group">
+        <label>優化策略</label>
+        <select id="inp-strategy">
+          <option value="mixed">🔀 混合策略（SKEMPI 導向 + 保守性替換）</option>
+          <option value="conservative">🛡️ 保守策略（BLOSUM62 引導）</option>
+          <option value="aggressive">⚡ 激進策略（SKEMPI 最強化結合）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>生成候選數量</label>
+        <select id="inp-variants">
+          <option value="40">40 個（快速）</option>
+          <option value="80" selected>80 個（建議）</option>
+          <option value="150">150 個（深度）</option>
+        </select>
+      </div>
+
+      <div id="error-box" class="alert alert-error" style="display:none;"></div>
+
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-label">
+          <span id="progress-text">正在分析...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="log-box" id="log-box"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn btn-primary" id="run-btn" onclick="runAnalysis()">
+          <span id="run-icon">🚀</span> 開始優化分析
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="clearForm()">清空</button>
+      </div>
+    </div>
+
+    <!-- Quick stats / last result -->
+    <div>
+      <div class="stats-row" style="grid-template-columns:1fr 1fr;">
+        <div class="stat-card">
+          <div class="stat-icon" style="font-size:1.3rem;margin-bottom:4px;">📦</div>
+          <div class="stat-val" style="color:#818cf8;" id="stat-total">7,085</div>
+          <div class="stat-lbl">SKEMPI 突變記錄</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="font-size:1.3rem;margin-bottom:4px;">🏗️</div>
+          <div class="stat-val" style="color:#34d399;" id="stat-pdb">345</div>
+          <div class="stat-lbl">PDB 結構數</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="font-size:1.3rem;margin-bottom:4px;">⚡</div>
+          <div class="stat-val" style="color:#fbbf24;" id="stat-koff">1,844</div>
+          <div class="stat-lbl">koff 動力學資料</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="font-size:1.3rem;margin-bottom:4px;">📝</div>
+          <div class="stat-val" style="color:#f87171;" id="stat-sessions">0</div>
+          <div class="stat-lbl">已分析次數</div>
+        </div>
+      </div>
+
+      <div class="card" id="last-result-card" style="display:none;">
+        <div class="card-title">✅ 最近分析結果</div>
+        <div id="last-result-content"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px;">
+        <div class="card-title">📡 API 端點</div>
+        <div style="font-size:.78rem;color:var(--muted);line-height:2;">
+          <div><code style="color:#818cf8;">POST /api/analyze</code> — 執行完整優化</div>
+          <div><code style="color:#34d399;">GET  /api/stats</code> — 資料庫統計</div>
+          <div><code style="color:#fbbf24;">GET  /api/skempi/search?pdb=1CSE</code> — 搜尋突變</div>
+          <div><code style="color:#f87171;">GET  /api/session/&lt;id&gt;</code> — 取得歷史結果</div>
+          <div><code style="color:#94a3b8;">GET  /api/history</code> — 歷史列表</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======= PAGE: RESULTS ======= -->
+<div class="page" id="page-results">
+  <div id="no-results" class="alert alert-info">尚未執行分析，請先在「優化分析」頁面輸入序列並執行。</div>
+  <div id="results-content" style="display:none;">
+
+    <!-- Summary row -->
+    <div class="stats-row" style="grid-template-columns:repeat(6,1fr);margin-bottom:16px;" id="result-stats-row"></div>
+
+    <!-- PDB match + alanine scan -->
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🔍 最佳 PDB 結構匹配</div>
+        <div id="pdb-match-content"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🔬 丙胺酸掃描熱點圖 (Top 20)</div>
+        <div class="chart-wrap-sm"><canvas id="ala-scan-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Pareto + Radar -->
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🎯 Pareto 前沿：結合力 vs 免疫原性</div>
+        <div class="chart-wrap"><canvas id="res-pareto-chart"></canvas></div>
+        <div class="legend">
+          <span><span class="ldot" style="background:#ef4444;"></span>Pareto Rank 1</span>
+          <span><span class="ldot" style="background:#f59e0b;"></span>Rank 2-3</span>
+          <span><span class="ldot" style="background:#94a3b8;"></span>Others</span>
+          <span><span class="ldot" style="background:#fff;border:2px solid #555;"></span>WT</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">⚡ 動力學：ΔΔG vs k_off</div>
+        <div class="chart-wrap"><canvas id="res-koff-chart"></canvas></div>
+        <div class="legend">
+          <span><span class="ldot" style="background:#ef4444;"></span>Pareto 1</span>
+          <span><span class="ldot" style="background:#6366f1;"></span>其他</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top candidates table -->
+    <div class="card">
+      <div class="card-title" style="justify-content:space-between;">
+        <span>💊 最佳候選分子（Pareto 排序）</span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline btn-sm" onclick="filterTable('all')">全部</button>
+          <button class="btn btn-outline btn-sm" onclick="filterTable('pareto1')">Pareto Rank 1</button>
+          <button class="btn btn-outline btn-sm" onclick="exportCSV()">⬇ 匯出 CSV</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th><th>Variant</th><th>突變</th>
+              <th onclick="sortTable('ddG_binding')" style="cursor:pointer;">ΔΔG_bind ↕</th>
+              <th onclick="sortTable('koff_relative')" style="cursor:pointer;">k_off ↕</th>
+              <th>Residence (s)</th>
+              <th>免疫原性</th><th>聚集</th><th>溶解度</th>
+              <th>pI</th><th>SKEMPI支持</th><th>Pareto</th>
+            </tr>
+          </thead>
+          <tbody id="candidates-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SKEMPI evidence for top candidate -->
+    <div class="card" id="evidence-card">
+      <div class="card-title">📚 SKEMPI 2.0 實驗證據（Top 候選物突變）</div>
+      <div id="evidence-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======= PAGE: SKEMPI ======= -->
+<div class="page" id="page-skempi">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">🔍 SKEMPI 資料庫搜尋</div>
+      <div class="search-input-wrap">
+        <input type="text" id="skempi-pdb" placeholder="PDB ID (e.g. 1CSE)" style="max-width:120px;">
+        <input type="text" id="skempi-protein" placeholder="蛋白質名稱 (e.g. Barnase)">
+        <input type="text" id="skempi-mut" placeholder="突變 (e.g. W35A)">
+        <button class="btn btn-primary btn-sm" onclick="searchSKEMPI()">搜尋</button>
+      </div>
+      <div class="tbl-wrap" id="skempi-results" style="max-height:340px;">
+        <div style="padding:20px;text-align:center;color:var(--muted);">輸入條件後按搜尋</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-title">📊 SKEMPI ΔΔG 分布（真實實驗數據）</div>
+        <div class="chart-wrap"><canvas id="skempi-dist-chart"></canvas></div>
+      </div>
+      <div class="stats-row" style="grid-template-columns:1fr 1fr 1fr;">
+        <div class="stat-card">
+          <div class="stat-val" style="color:#818cf8;">7,085</div>
+          <div class="stat-lbl">總突變記錄</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#34d399;">6,798</div>
+          <div class="stat-lbl">有 ΔΔG 資料</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#fbbf24;">1,844</div>
+          <div class="stat-lbl">有 koff 資料</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- koff distribution -->
+  <div class="card" style="margin-top:14px;">
+    <div class="card-title">⚡ SKEMPI koff 比值分布（突變 vs 野生型）</div>
+    <div class="chart-wrap-sm"><canvas id="skempi-koff-chart"></canvas></div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:8px;">koff_ratio = koff_mut / koff_wt。比值 > 1 表示突變後解離加快（弱化）；&lt;1 表示留存更久（強化）。</div>
+  </div>
+</div>
+
+<!-- ======= PAGE: HISTORY ======= -->
+<div class="page" id="page-history">
+  <div class="card">
+    <div class="card-title" style="justify-content:space-between;">
+      <span>📋 分析歷史（SQLite 持久化記錄）</span>
+      <button class="btn btn-outline btn-sm" onclick="loadHistory()">🔄 重新整理</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Session ID</th><th>名稱</th><th>標靶</th><th>時間</th><th>Matched PDB</th><th>候選數</th><th>最佳 ΔΔG</th><th>耗時</th><th>操作</th></tr>
+        </thead>
+        <tbody id="history-tbody">
+          <tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted);">載入中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ======= PAGE: OVERVIEW ======= -->
+<div class="page" id="page-overview">
+  <div class="card" style="margin-bottom:18px;">
+    <div class="card-title">🏗️ 三工具並行優化架構</div>
+    <div style="padding:16px;background:var(--card2);border-radius:10px;">
+      <div style="text-align:center;margin-bottom:12px;">
+        <div style="display:inline-block;background:rgba(148,163,184,.1);border:1px solid var(--border);border-radius:8px;padding:10px 24px;font-size:.85rem;">
+          🔬 輸入蛋白質序列<br><span style="font-size:.72rem;color:var(--muted);">序列清洗 → k-mer PDB 搜尋 → 界面殘基識別</span>
+        </div>
+      </div>
+      <div style="text-align:center;color:var(--muted);font-size:1.1rem;margin:6px 0">↓ 並行分配</div>
+      <div style="display:grid;grid-template-columns:1fr 30px 1fr 30px 1fr;gap:0;align-items:center;">
+        <div style="background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.4);border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-weight:700;color:#818cf8;font-size:.9rem;">工具一</div>
+          <div style="font-size:.8rem;margin:4px 0;">結構穩定性</div>
+          <div style="font-size:.72rem;color:var(--muted);">丙胺酸掃描 · 熱點識別<br>ΔΔG_stability</div>
+          <div style="margin-top:8px;"><span class="pill pill-blue">PDB 345個</span></div>
+        </div>
+        <div style="text-align:center;color:var(--muted);">⇔</div>
+        <div style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.4);border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-weight:700;color:#34d399;font-size:.9rem;">工具二</div>
+          <div style="font-size:.8rem;margin:4px 0;">結合動力學</div>
+          <div style="font-size:.72rem;color:var(--muted);">SKEMPI koff · Residence Time<br>340 對替換統計</div>
+          <div style="margin-top:8px;"><span class="pill pill-green">1,844 koff 紀錄</span></div>
+        </div>
+        <div style="text-align:center;color:var(--muted);">⇔</div>
+        <div style="background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-weight:700;color:#fbbf24;font-size:.9rem;">工具三</div>
+          <div style="font-size:.8rem;margin:4px 0;">成藥性評估</div>
+          <div style="font-size:.72rem;color:var(--muted);">免疫原性 · 聚集 · 溶解度<br>Pareto 多目標優化</div>
+          <div style="margin-top:8px;"><span class="pill pill-yellow">PyMOO NDS</span></div>
+        </div>
+      </div>
+      <div style="text-align:center;color:var(--muted);font-size:1.1rem;margin:6px 0">↓ 異質參數整合 → Pareto 最優</div>
+      <div style="text-align:center;">
+        <div style="display:inline-block;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.4);border-radius:8px;padding:10px 24px;font-size:.85rem;">
+          🏆 輸出最佳候選分子 + SQLite 持久化<br><span style="font-size:.72rem;color:var(--muted);">ΔΔG · koff · 免疫原性 · 聚集 · 溶解度 · Pareto Rank</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">📦 資料庫組成</div>
+      <div id="arch-db-stats">載入中...</div>
+    </div>
+    <div class="card">
+      <div class="card-title">⚙️ 技術架構</div>
+      <div style="font-size:.82rem;line-height:2.2;color:var(--muted);">
+        <div>🗄️ <strong style="color:var(--text);">SQLite</strong> — 輕量非揮發性資料庫（7.2 MB）</div>
+        <div>🐍 <strong style="color:var(--text);">Flask REST API</strong> — 後端服務</div>
+        <div>🔬 <strong style="color:var(--text);">BioPython</strong> — PDB 結構解析</div>
+        <div>📊 <strong style="color:var(--text);">SKEMPI 2.0</strong> — 7,085 真實突變記錄</div>
+        <div>🧮 <strong style="color:var(--text);">SKEMPI 校準模型</strong> — 340 對替換統計</div>
+        <div>🎯 <strong style="color:var(--text);">Pareto NDS</strong> — 三目標非支配排序</div>
+        <div>📈 <strong style="color:var(--text);">Chart.js 4</strong> — 互動式視覺化</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- end container -->
+
+<script>
+const API = '';  // same origin
+let currentResult = null;
+let allCandidates = [];
+let currentFilter = 'all';
+let sortField = 'pareto_rank';
+let skempiDistLoaded = false;
+
+// ── nav ──────────────────────────────────────────────────────────────────────
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (el) el.classList.add('active');
+  if (name === 'skempi' && !skempiDistLoaded) loadSKEMPIDist();
+  if (name === 'history') loadHistory();
+  if (name === 'overview') loadOverviewStats();
+}
+
+// ── preset sequences ─────────────────────────────────────────────────────────
+const PRESETS = {
+  barnase: {name:'Barnase', target:'Barstar',
+    seq:'AQVINTFDGVADYLQTYHKLPDNYITKSEAQALGWVASKGNLADVAPGKSIGGDIFSNREGKLPGKSGRTWREADINYTSGFRNSDRILYSSDWLIYKTTDHYQTFTKIR'},
+  eglin: {name:'Eglin c', target:'Subtilisin',
+    seq:'KSFPEVVGKTVELKGSALRSSIDELKQYFTLHYPPQYNVYFLDGELSVDSMQTLSDIDRVERQMFSHNLKPENHYNIFQLTELPPELDSIL'},
+  il2:   {name:'IL-2 Fragment', target:'IL-2 Receptor',
+    seq:'APTSSSTKKTQLQLEHLLLDLQMILNGINNYKNPKLTRMLTFKFYMPKKATELKHLQCLEEELKPLE'},
+  insulin:{name:'Insulin A-chain',target:'Insulin Receptor',
+    seq:'GIVEQCCTSICSLYQLENYCN'},
+  custom:{name:'Anti-PD1 VHH',target:'PD-1',
+    seq:'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYWMHWVRQAPGKGLEWVASISGDGSSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCARDRQRYFDYWGQGTLVTVSS'},
+};
+function loadPreset(key) {
+  const p = PRESETS[key];
+  document.getElementById('inp-name').value  = p.name;
+  document.getElementById('inp-target').value = p.target;
+  document.getElementById('inp-seq').value    = p.seq;
+  updateSeqLen();
+}
+document.getElementById('inp-seq').addEventListener('input', updateSeqLen);
+function updateSeqLen() {
+  const seq = document.getElementById('inp-seq').value.replace(/\s/g,'');
+  document.getElementById('seq-len-display').textContent = `序列長度：${seq.length} aa`;
+}
+
+// ── run analysis ──────────────────────────────────────────────────────────────
+async function runAnalysis() {
+  const seq      = document.getElementById('inp-seq').value.trim();
+  const name     = document.getElementById('inp-name').value.trim() || 'Query';
+  const target   = document.getElementById('inp-target').value.trim() || 'Unknown';
+  const strategy = document.getElementById('inp-strategy').value;
+  const nvar     = parseInt(document.getElementById('inp-variants').value);
+
+  document.getElementById('error-box').style.display = 'none';
+  if (!seq || seq.length < 6) {
+    showError('請輸入至少 6 個氨基酸的序列');
+    return;
+  }
+
+  const btn  = document.getElementById('run-btn');
+  btn.disabled = true;
+  document.getElementById('run-icon').innerHTML = '<span class="spinner"></span>';
+
+  const pw = document.getElementById('progress-wrap');
+  pw.style.display = 'block';
+  const steps = [
+    [10, '🔍 搜尋最近似 PDB 結構...'],
+    [30, '🔬 執行丙胺酸掃描（工具一）...'],
+    [55, '⚡ 生成候選變體 + SKEMPI ddG 評估（工具二）...'],
+    [80, '🧮 成藥性多目標評估（工具三）...'],
+    [95, '🎯 Pareto 非支配排序...'],
+  ];
+  let si = 0;
+  const timer = setInterval(() => {
+    if (si < steps.length) {
+      setProgress(steps[si][0], steps[si][1]);
+      si++;
+    }
+  }, 400);
+
+  try {
+    const resp = await fetch(`${API}/api/analyze`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sequence:seq, name, target, strategy, max_variants:nvar})
+    });
+    const data = await resp.json();
+    clearInterval(timer);
+
+    if (!data.ok) {
+      showError(data.error || '分析失敗');
+    } else {
+      setProgress(100, '✅ 分析完成！');
+      setTimeout(() => { pw.style.display = 'none'; }, 1500);
+      currentResult  = data.result;
+      allCandidates  = data.result.candidates || [];
+      renderResults(data.result);
+      showPage('results', document.querySelectorAll('.nav-tab')[1]);
+      loadStats(); // refresh session count
+    }
+  } catch(e) {
+    clearInterval(timer);
+    showError('連線失敗：' + e.message + ' （請確認 Flask 伺服器正在運行）');
+  }
+
+  btn.disabled = false;
+  document.getElementById('run-icon').textContent = '🚀';
+}
+
+function setProgress(pct, text) {
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent  = pct + '%';
+  document.getElementById('progress-text').textContent = text;
+  const lb = document.getElementById('log-box');
+  lb.innerHTML += `<div>${text}</div>`;
+  lb.scrollTop = lb.scrollHeight;
+}
+function showError(msg) {
+  const b = document.getElementById('error-box');
+  b.textContent = '❌ ' + msg;
+  b.style.display = 'block';
+}
+function clearForm() {
+  document.getElementById('inp-seq').value = '';
+  document.getElementById('inp-name').value = '';
+  document.getElementById('inp-target').value = '';
+  document.getElementById('error-box').style.display = 'none';
+  document.getElementById('progress-wrap').style.display = 'none';
+  document.getElementById('log-box').innerHTML = '';
+  updateSeqLen();
+}
+
+// ── render results ────────────────────────────────────────────────────────────
+let chartInstances = {};
+function destroyChart(id) {
+  if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; }
+}
+
+function renderResults(r) {
+  document.getElementById('no-results').style.display = 'none';
+  document.getElementById('results-content').style.display = 'block';
+
+  // Stats row
+  const p1 = r.n_pareto1 || 0;
+  const top = (r.candidates || [])[0];
+  document.getElementById('result-stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-val" style="color:#818cf8;">${r.sequence_len}</div><div class="stat-lbl">序列長度 (aa)</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#34d399;">${r.n_hotspots||0}</div><div class="stat-lbl">熱點殘基</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#fbbf24;">${(r.candidates||[]).length}</div><div class="stat-lbl">生成候選數</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#ef4444;">${p1}</div><div class="stat-lbl">Pareto Rank 1</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#6366f1;">${top ? top.ddG_binding.toFixed(2) : 'N/A'}</div><div class="stat-lbl">最佳 ΔΔG</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#34d399;">${r.runtime_sec||0}s</div><div class="stat-lbl">分析耗時</div></div>
+  `;
+
+  // PDB match
+  const pdbHtml = r.matched_pdb ? `
+    <div class="info-row"><span>匹配 PDB</span><span class="pill pill-blue">${r.matched_pdb}</span></div>
+    <div class="info-row"><span>相似度分數</span><span style="color:#34d399;font-weight:600;">${(r.pdb_similarity*100).toFixed(1)}%</span></div>
+    <div class="info-row"><span>蛋白質</span><span style="color:var(--muted);font-size:.78rem;">${(r.pdb_proteins||[]).slice(0,2).join(' / ')}</span></div>
+    ${(r.pdb_matches||[]).slice(1,4).map(m => `
+    <div class="info-row"><span style="color:var(--muted);">備選 ${m.pdb_id}</span><span style="font-size:.75rem;">${(m.score*100).toFixed(1)}%</span></div>`).join('')}
+    <div style="margin-top:8px;font-size:.75rem;color:var(--muted);">SKEMPI 統計模型基於 340 對氨基酸替換的真實實驗數據</div>
+  ` : '<div style="color:var(--muted);">未找到高度相似的 PDB 結構（使用物理計算作為後備）</div>';
+  document.getElementById('pdb-match-content').innerHTML = pdbHtml;
+
+  // Alanine scan chart
+  destroyChart('ala-scan-chart');
+  const scan = (r.alanine_scan || []).slice(0, 20);
+  chartInstances['ala-scan-chart'] = new Chart('ala-scan-chart', {
+    type:'bar',
+    data:{ labels: scan.map(s => `${s.wt_aa}${s.position}`),
+      datasets:[{
+        data: scan.map(s => s.ddG_ala),
+        backgroundColor: scan.map(s => s.is_hotspot ? 'rgba(239,68,68,.8)' : s.contribution==='warm' ? 'rgba(245,158,11,.7)' : 'rgba(99,102,241,.5)'),
+        borderWidth:0
+      }]
+    },
+    options:{
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        title: c=>`位置: ${c[0].label}`,
+        label: c=>[`ΔΔG_ala: ${c.raw?.toFixed(2)} kcal/mol`, c.raw>1?'🔥 熱點':c.raw>0.5?'⚡ 溫點':'中性']
+      }}},
+      scales:{
+        x:{grid:{color:'rgba(45,49,84,.5)'},ticks:{font:{size:9},maxRotation:90}},
+        y:{grid:{color:'rgba(45,49,84,.5)'},title:{display:true,text:'ΔΔG_ala'}}
+      }
+    }
+  });
+
+  // Pareto chart
+  destroyChart('res-pareto-chart');
+  const cands = r.candidates || [];
+  const wt = r.wt_baseline;
+  chartInstances['res-pareto-chart'] = new Chart('res-pareto-chart', {
+    type:'scatter',
+    data:{datasets:[
+      {label:'Pareto 1', data:cands.filter(c=>c.pareto_rank===1).map(c=>({x:c.ddG_binding,y:c.immunogenicity,id:c.variant_id,muts:c.mutations})), backgroundColor:'rgba(239,68,68,.8)', pointRadius:7},
+      {label:'Rank 2-3', data:cands.filter(c=>c.pareto_rank>1&&c.pareto_rank<=3).map(c=>({x:c.ddG_binding,y:c.immunogenicity})), backgroundColor:'rgba(245,158,11,.6)', pointRadius:5},
+      {label:'Others',   data:cands.filter(c=>c.pareto_rank>3).map(c=>({x:c.ddG_binding,y:c.immunogenicity})), backgroundColor:'rgba(148,163,184,.3)', pointRadius:3},
+      wt ? {label:'WT', data:[{x:0,y:wt.immunogenicity}], backgroundColor:'rgba(255,255,255,.9)', borderColor:'#555', borderWidth:2, pointRadius:8, pointStyle:'crossRot'} : null
+    ].filter(Boolean)},
+    options:{
+      plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>c.raw.id?`${c.raw.id} | ΔΔG=${c.raw.x?.toFixed(2)} muts=${JSON.stringify(c.raw.muts)}`:`(${c.raw.x?.toFixed(2)}, ${c.raw.y?.toFixed(3)})`}}},
+      scales:{
+        x:{title:{display:true,text:'ΔΔG_binding (負=更強)'},grid:{color:'rgba(45,49,84,.5)'}},
+        y:{title:{display:true,text:'免疫原性 (低=安全)'},grid:{color:'rgba(45,49,84,.5)'},min:0}
+      }
+    }
+  });
+
+  // koff chart
+  destroyChart('res-koff-chart');
+  chartInstances['res-koff-chart'] = new Chart('res-koff-chart', {
+    type:'scatter',
+    data:{datasets:[
+      {label:'Pareto 1', data:cands.filter(c=>c.pareto_rank===1).map(c=>({x:c.ddG_binding,y:c.koff_relative,id:c.variant_id})), backgroundColor:'rgba(239,68,68,.8)', pointRadius:7},
+      {label:'Others',   data:cands.filter(c=>c.pareto_rank>1).map(c=>({x:c.ddG_binding,y:c.koff_relative})), backgroundColor:'rgba(99,102,241,.4)', pointRadius:4},
+      wt ? {label:'WT', data:[{x:0,y:1}], backgroundColor:'rgba(255,255,255,.9)', borderColor:'#555', borderWidth:2, pointRadius:8, pointStyle:'crossRot'} : null
+    ].filter(Boolean)},
+    options:{
+      plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>c.raw.id?`${c.raw.id} ΔΔG=${c.raw.x?.toFixed(2)} koff=${c.raw.y?.toFixed(3)}`:`(${c.raw.x?.toFixed(2)}, ${c.raw.y?.toFixed(3)})`}}},
+      scales:{
+        x:{title:{display:true,text:'ΔΔG_binding'},grid:{color:'rgba(45,49,84,.5)'}},
+        y:{title:{display:true,text:'Relative k_off'},grid:{color:'rgba(45,49,84,.5)'},min:0}
+      }
+    }
+  });
+
+  renderCandidatesTable(cands);
+  renderEvidence(cands.slice(0,3));
+
+  // Last result card in optimize tab
+  document.getElementById('last-result-card').style.display = 'block';
+  document.getElementById('last-result-content').innerHTML = `
+    <div class="alert alert-success" style="margin-bottom:0;">
+      ✅ Session <code>${r.session_id}</code> | ${r.input_name} → ${r.input_target}<br>
+      找到 ${r.n_pareto1} 個 Pareto Rank-1 候選 | 最佳 ΔΔG = ${(cands[0]?.ddG_binding||0).toFixed(2)} kcal/mol
+    </div>
+  `;
+}
+
+function renderCandidatesTable(cands) {
+  let data = currentFilter === 'pareto1' ? cands.filter(c=>c.pareto_rank===1) : cands;
+  data = [...data].sort((a,b) => {
+    if (sortField === 'pareto_rank') return a.pareto_rank - b.pareto_rank || a.ddG_binding - b.ddG_binding;
+    if (sortField === 'ddG_binding') return a.ddG_binding - b.ddG_binding;
+    if (sortField === 'koff_relative') return a.koff_relative - b.koff_relative;
+    return 0;
+  });
+
+  document.getElementById('candidates-tbody').innerHTML = data.slice(0,80).map((c,i) => {
+    const rank   = c.pareto_rank;
+    const rCls   = rank===1?'pill-green':rank<=3?'pill-yellow':'pill-gray';
+    const ddgCls = c.ddG_binding<-1?'pill-green':c.ddG_binding>1?'pill-red':'pill-yellow';
+    const kCls   = c.koff_relative<0.5?'pill-green':c.koff_relative>2?'pill-red':'pill-yellow';
+    const iCls   = c.immunogenicity<0.4?'pill-green':c.immunogenicity>0.7?'pill-red':'pill-yellow';
+    const aCls   = c.aggregation<0.4?'pill-green':c.aggregation>0.6?'pill-red':'pill-yellow';
+    const sCls   = c.solubility>0.6?'pill-green':c.solubility<0.4?'pill-red':'pill-yellow';
+    const muts = Array.isArray(c.mutations)?c.mutations.join(', '):(c.mutations||'');
+    return `<tr>
+      <td style="color:var(--muted);">${i+1}</td>
+      <td style="font-family:monospace;font-size:.78rem;">${c.variant_id}</td>
+      <td style="font-size:.75rem;color:var(--muted);max-width:120px;" title="${muts}">${muts||'–'}</td>
+      <td><span class="pill ${ddgCls}">${c.ddG_binding?.toFixed(3)}</span></td>
+      <td><span class="pill ${kCls}">${c.koff_relative?.toFixed(3)}</span></td>
+      <td>${c.residence_time?.toFixed(2)}s</td>
+      <td><span class="pill ${iCls}">${c.immunogenicity?.toFixed(3)}</span></td>
+      <td><span class="pill ${aCls}">${c.aggregation?.toFixed(3)}</span></td>
+      <td><span class="pill ${sCls}">${c.solubility?.toFixed(3)}</span></td>
+      <td>${c.pI?.toFixed(1)}</td>
+      <td style="color:${c.skempi_support>0?'#34d399':'var(--muted)'};">${c.skempi_support||0}</td>
+      <td><span class="pill ${rCls}">#${rank}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function filterTable(f) {
+  currentFilter = f;
+  if (allCandidates.length) renderCandidatesTable(allCandidates);
+}
+function sortTable(f) { sortField = f; if (allCandidates.length) renderCandidatesTable(allCandidates); }
+
+function renderEvidence(topCands) {
+  if (!topCands || !topCands.length || !currentResult?.matched_pdb) {
+    document.getElementById('evidence-card').style.display = 'none';
+    return;
+  }
+  document.getElementById('evidence-card').style.display = 'block';
+  const pdb = currentResult.matched_pdb;
+  fetch(`${API}/api/skempi/search?pdb=${pdb}&limit=20`)
+    .then(r=>r.json())
+    .then(data => {
+      if (!data.ok || !data.records.length) {
+        document.getElementById('evidence-content').innerHTML = '<div style="color:var(--muted);font-size:.8rem;">此 PDB 無相關 SKEMPI 記錄</div>';
+        return;
+      }
+      const rows = data.records.slice(0,10).map(r => `
+        <tr>
+          <td style="font-family:monospace;">${r.mutation_clean}</td>
+          <td><span class="pill ${r.ddG_kcal>1?'pill-red':r.ddG_kcal<-0.5?'pill-green':'pill-yellow'}">${r.ddG_kcal?.toFixed(2)}</span></td>
+          <td style="color:var(--muted);">${r.koff_ratio?.toFixed(3)||'–'}</td>
+          <td style="font-size:.75rem;color:var(--muted);">${r.location||'–'}</td>
+          <td style="font-size:.75rem;color:var(--muted);">${r.protein1||''} / ${r.protein2||''}</td>
+        </tr>`).join('');
+      document.getElementById('evidence-content').innerHTML = `
+        <div class="evidence-box" style="margin-bottom:12px;">
+          找到 <span class="ev-count">${data.total}</span> 筆 SKEMPI 實驗記錄支持此 PDB (${pdb})
+          — 上述 ddG 預測模型已由這些真實數據校準
+        </div>
+        <div class="tbl-wrap" style="max-height:220px;">
+          <table><thead><tr><th>突變</th><th>ΔΔG (kcal/mol)</th><th>koff ratio</th><th>位置類型</th><th>蛋白質</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+        </div>`;
+    });
+}
+
+function exportCSV() {
+  if (!allCandidates.length) return;
+  const hdr = 'variant_id,mutations,ddG_binding,koff_relative,residence_time,immunogenicity,aggregation,solubility,pI,mw_kDa,skempi_support,pareto_rank';
+  const rows = allCandidates.map(c =>
+    [c.variant_id, `"${(c.mutations||[]).join(';')}"`, c.ddG_binding, c.koff_relative,
+     c.residence_time, c.immunogenicity, c.aggregation, c.solubility, c.pI, c.mw_kDa,
+     c.skempi_support, c.pareto_rank].join(',')
+  );
+  const blob = new Blob([hdr+'\n'+rows.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `candidates_${currentResult?.session_id||'export'}.csv`;
+  a.click();
+}
+
+// ── SKEMPI page ───────────────────────────────────────────────────────────────
+async function loadSKEMPIDist() {
+  skempiDistLoaded = true;
+  try {
+    const data = await fetch(`${API}/api/skempi/distribution`).then(r=>r.json());
+    if (!data.ok) return;
+    const ddGs = data.ddG;
+    const min=-5, max=12, step=0.5;
+    const labels=[], bins=[];
+    for (let v=min; v<max; v+=step) {
+      labels.push(v.toFixed(1));
+      bins.push(ddGs.filter(x=>x>=v&&x<v+step).length);
+    }
+    Chart.defaults.color='#94a3b8';
+    new Chart('skempi-dist-chart', {
+      type:'bar',
+      data:{labels, datasets:[{data:bins, backgroundColor:labels.map(l=>parseFloat(l)<0?'rgba(16,185,129,.65)':'rgba(239,68,68,.55)'), borderWidth:0}]},
+      options:{plugins:{legend:{display:false},tooltip:{callbacks:{title:c=>`ΔΔG≈${c[0].label} kcal/mol`,label:c=>`記錄數: ${c.raw}`}}},
+        scales:{x:{title:{display:true,text:'ΔΔG (kcal/mol)'},grid:{color:'rgba(45,49,84,.5)'}},y:{title:{display:true,text:'突變數量'},grid:{color:'rgba(45,49,84,.5)'}}}}
+    });
+
+    // koff chart
+    const koffs = data.koffs.filter(k=>k>0&&k<10);
+    const kBins=[], kLabels=[];
+    for (let v=0;v<5;v+=0.2) {
+      kLabels.push(v.toFixed(1));
+      kBins.push(koffs.filter(x=>x>=v&&x<v+0.2).length);
+    }
+    new Chart('skempi-koff-chart', {
+      type:'bar',
+      data:{labels:kLabels,datasets:[{data:kBins,backgroundColor:'rgba(99,102,241,.6)',borderWidth:0}]},
+      options:{plugins:{legend:{display:false}},scales:{x:{title:{display:true,text:'koff_ratio (mut/wt)'},grid:{color:'rgba(45,49,84,.5)'}},y:{title:{display:true,text:'記錄數'},grid:{color:'rgba(45,49,84,.5)'}}}}
+    });
+  } catch(e) { console.error(e); }
+}
+
+async function searchSKEMPI() {
+  const pdb  = document.getElementById('skempi-pdb').value.trim();
+  const prot = document.getElementById('skempi-protein').value.trim();
+  const mut  = document.getElementById('skempi-mut').value.trim();
+  const el   = document.getElementById('skempi-results');
+  el.innerHTML = '<div style="padding:16px;color:var(--muted);">搜尋中...</div>';
+
+  const params = new URLSearchParams();
+  if (pdb)  params.set('pdb', pdb);
+  if (prot) params.set('protein', prot);
+  if (mut)  params.set('mutation', mut);
+  params.set('limit', '100');
+
+  try {
+    const data = await fetch(`${API}/api/skempi/search?${params}`).then(r=>r.json());
+    if (!data.ok || !data.records.length) {
+      el.innerHTML = `<div style="padding:16px;color:var(--muted);">無符合結果 (${data.error||''})</div>`;
+      return;
+    }
+    const rows = data.records.map(r=>`
+      <tr>
+        <td style="font-family:monospace;">${r.pdb_id}</td>
+        <td style="font-family:monospace;font-size:.78rem;">${r.mutation_clean}</td>
+        <td><span class="pill ${r.ddG_kcal>1?'pill-red':r.ddG_kcal<-0.5?'pill-green':'pill-yellow'}">${r.ddG_kcal?.toFixed(3)}</span></td>
+        <td style="color:var(--muted);">${r.koff_ratio?.toFixed(3)||'–'}</td>
+        <td><span class="pill pill-gray">${r.location||'?'}</span></td>
+        <td style="font-size:.75rem;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;">${r.protein1} / ${r.protein2}</td>
+      </tr>`).join('');
+    el.innerHTML = `
+      <div style="padding:8px 12px;font-size:.78rem;color:var(--muted);">找到 ${data.total} 筆記錄</div>
+      <table><thead><tr><th>PDB</th><th>突變</th><th>ΔΔG (kcal/mol)</th><th>koff ratio</th><th>位置</th><th>蛋白質</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch(e) {
+    el.innerHTML = `<div style="padding:16px;color:var(--muted);">錯誤: ${e.message}</div>`;
+  }
+}
+
+// ── history ───────────────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const data = await fetch(`${API}/api/history?limit=30`).then(r=>r.json());
+    if (!data.ok) return;
+    const tbody = document.getElementById('history-tbody');
+    if (!data.sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted);">尚無記錄</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.sessions.map(s => {
+      const summary = s.result_summary || {};
+      const bestDdG = summary.best_ddG?.toFixed(2) ?? '–';
+      const dt = new Date(s.created_at).toLocaleString('zh-TW', {timeZone:'Asia/Taipei'});
+      return `<tr>
+        <td style="font-family:monospace;font-size:.75rem;">${s.session_id}</td>
+        <td>${s.input_name||'–'}</td>
+        <td style="color:var(--muted);">${s.input_target||'–'}</td>
+        <td style="font-size:.75rem;color:var(--muted);">${dt}</td>
+        <td><span class="pill pill-blue">${s.matched_pdb||'–'}</span></td>
+        <td style="color:#34d399;">${s.n_candidates||0}</td>
+        <td><span class="pill ${bestDdG!=='–'&&parseFloat(bestDdG)<0?'pill-green':'pill-yellow'}">${bestDdG}</span></td>
+        <td style="color:var(--muted);">${s.runtime_sec?.toFixed(2)||'–'}s</td>
+        <td><button class="btn btn-outline btn-sm" onclick="loadSession('${s.session_id}')">載入</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
+async function loadSession(sid) {
+  try {
+    const data = await fetch(`${API}/api/session/${sid}`).then(r=>r.json());
+    if (!data.ok) { alert('載入失敗'); return; }
+    // Reconstruct minimal result object
+    const s = data.session;
+    const cands = s.candidates || [];
+    currentResult = {
+      session_id: s.session_id,
+      input_name: s.input_name,
+      input_target: s.input_target,
+      matched_pdb: s.matched_pdb,
+      pdb_similarity: 0,
+      pdb_proteins: [],
+      pdb_matches: [],
+      alanine_scan: [],
+      n_hotspots: 0,
+      n_pareto1: cands.filter(c=>c.pareto_rank===1).length,
+      sequence_len: s.input_sequence?.length || 0,
+      runtime_sec: s.runtime_sec,
+      candidates: cands,
+      wt_baseline: null,
+    };
+    allCandidates = cands;
+    renderResults(currentResult);
+    showPage('results', document.querySelectorAll('.nav-tab')[1]);
+  } catch(e) { alert('錯誤: '+e.message); }
+}
+
+// ── overview stats ────────────────────────────────────────────────────────────
+async function loadOverviewStats() {
+  try {
+    const data = await fetch(`${API}/api/stats`).then(r=>r.json());
+    if (!data.ok) return;
+    const s = data.stats;
+    document.getElementById('arch-db-stats').innerHTML = `
+      <div class="info-row"><span>SKEMPI 總記錄</span><span style="color:#818cf8;font-weight:600;">${s.skempi_total?.toLocaleString()}</span></div>
+      <div class="info-row"><span>有 ΔΔG 資料</span><span style="color:#34d399;">${s.with_ddG?.toLocaleString()}</span></div>
+      <div class="info-row"><span>有 koff 資料</span><span style="color:#fbbf24;">${s.with_koff?.toLocaleString()}</span></div>
+      <div class="info-row"><span>PDB 結構數</span><span>${s.pdb_structures}</span></div>
+      <div class="info-row"><span>殘基記錄數</span><span style="color:var(--muted);">${s.residues?.toLocaleString()}</span></div>
+      <div class="info-row"><span>界面殘基數</span><span style="color:#f87171;">${s.interface_res?.toLocaleString()}</span></div>
+      <div class="info-row"><span>已分析 Session</span><span style="color:#34d399;">${s.total_sessions}</span></div>
+      <div class="info-row"><span>已生成候選物</span><span>${s.total_candidates}</span></div>
+    `;
+  } catch(e) {}
+}
+
+// ── startup ───────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const data = await fetch(`${API}/api/stats`).then(r=>r.json());
+    if (!data.ok) {
+      document.getElementById('db-live').textContent = '❌ API 離線';
+      document.getElementById('db-live').style.borderColor = '#ef4444';
+      document.getElementById('db-live').style.color = '#f87171';
+      return;
+    }
+    document.getElementById('db-live').textContent = '✅ API 上線';
+    document.getElementById('stat-sessions').textContent = data.stats.total_sessions || 0;
+  } catch(e) {
+    document.getElementById('db-live').textContent = '❌ 無法連線';
+  }
+}
+
+loadStats();
+setInterval(loadStats, 15000);
+
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = '#2d3154';
+</script>
+</body>
+</html>

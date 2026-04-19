@@ -15,24 +15,47 @@ from Bio import SeqIO
 from Bio.PDB import PDBParser
 from Bio.SeqUtils import seq1
 
-DB_PATH    = Path(__file__).parent / "skempi.db"
-CSV_PATH   = Path("/sessions/admiring-trusting-fermat/mnt/uploads/skempi_v2.csv")
-PDB_DIR    = Path("/sessions/admiring-trusting-fermat/skempi_pdbs/PDBs")
+DB_PATH = Path(__file__).parent / "skempi.db"
+PROJECT_ROOT = Path(__file__).parent.parent
+CSV_PATH = PROJECT_ROOT / "skempi_v2.csv"
+PDB_DIR = PROJECT_ROOT / "PDBs"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 THREE_TO_ONE = {
-    'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C',
-    'GLN':'Q','GLU':'E','GLY':'G','HIS':'H','ILE':'I',
-    'LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P',
-    'SER':'S','THR':'T','TRP':'W','TYR':'Y','VAL':'V',
-    'MSE':'M','HSD':'H','HSE':'H','HSP':'H',
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "MSE": "M",
+    "HSD": "H",
+    "HSE": "H",
+    "HSP": "H",
 }
+
 
 def safe_float(v):
     try:
         f = float(v)
         return None if (math.isnan(f) or math.isinf(f)) else f
-    except: return None
+    except:
+        return None
+
 
 def calc_ddG(kd_mut, kd_wt, T=298.15):
     """ΔΔG = RT·ln(Kd_mut/Kd_wt)  [kcal/mol]"""
@@ -40,8 +63,10 @@ def calc_ddG(kd_mut, kd_wt, T=298.15):
         RT = 1.987e-3 * T  # kcal/mol
         if kd_mut and kd_wt and kd_mut > 0 and kd_wt > 0:
             return RT * math.log(kd_mut / kd_wt)
-    except: pass
+    except:
+        pass
     return None
+
 
 def parse_sequence_from_pdb(pdb_path):
     """Extract chain sequences from PDB file."""
@@ -54,7 +79,7 @@ def parse_sequence_from_pdb(pdb_path):
                 seq = ""
                 for res in chain:
                     if res.id[0] == " ":  # standard residues only
-                        aa = THREE_TO_ONE.get(res.resname, 'X')
+                        aa = THREE_TO_ONE.get(res.resname, "X")
                         seq += aa
                 if seq:
                     chains[chain.id] = seq
@@ -62,6 +87,7 @@ def parse_sequence_from_pdb(pdb_path):
         return chains
     except Exception as e:
         return {}
+
 
 def parse_mapping(mapping_path):
     """Parse .mapping file → {chain: [(resname, chain, pdb_num, seq_num), ...]}"""
@@ -71,10 +97,19 @@ def parse_mapping(mapping_path):
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 4:
-                    resname, chain, pdb_num, seq_num = parts[0], parts[1], int(parts[2]), int(parts[3])
-                    chains.setdefault(chain, []).append((resname, chain, pdb_num, seq_num))
-    except: pass
+                    resname, chain, pdb_num, seq_num = (
+                        parts[0],
+                        parts[1],
+                        int(parts[2]),
+                        int(parts[3]),
+                    )
+                    chains.setdefault(chain, []).append(
+                        (resname, chain, pdb_num, seq_num)
+                    )
+    except:
+        pass
     return chains
+
 
 # ── create schema ─────────────────────────────────────────────────────────────
 def create_schema(conn):
@@ -184,46 +219,61 @@ def create_schema(conn):
     """)
     conn.commit()
 
+
 # ── load SKEMPI CSV ────────────────────────────────────────────────────────────
 def load_skempi(conn):
     print("Loading SKEMPI 2.0 data...")
     rows_inserted = 0
-    with open(CSV_PATH, newline='') as f:
-        reader = csv.DictReader(f, delimiter=';')
+    with open(CSV_PATH, newline="") as f:
+        reader = csv.DictReader(f, delimiter=";")
         batch = []
         for row in reader:
-            pdb_complex = row['#Pdb']
-            parts = pdb_complex.split('_')
+            pdb_complex = row["#Pdb"]
+            parts = pdb_complex.split("_")
             pdb_id = parts[0]
-            chain1 = parts[1] if len(parts) > 1 else ''
-            chain2 = parts[2] if len(parts) > 2 else ''
+            chain1 = parts[1] if len(parts) > 1 else ""
+            chain2 = parts[2] if len(parts) > 2 else ""
 
-            kd_mut = safe_float(row['Affinity_mut_parsed'])
-            kd_wt  = safe_float(row['Affinity_wt_parsed'])
-            ddG    = calc_ddG(kd_mut, kd_wt, safe_float(row['Temperature']) or 298.15)
+            kd_mut = safe_float(row["Affinity_mut_parsed"])
+            kd_wt = safe_float(row["Affinity_wt_parsed"])
+            ddG = calc_ddG(kd_mut, kd_wt, safe_float(row["Temperature"]) or 298.15)
 
-            koff_mut = safe_float(row['koff_mut_parsed'])
-            koff_wt  = safe_float(row['koff_wt_parsed'])
+            koff_mut = safe_float(row["koff_mut_parsed"])
+            koff_wt = safe_float(row["koff_wt_parsed"])
             koff_ratio = None
             if koff_mut and koff_wt and koff_wt > 0:
                 koff_ratio = koff_mut / koff_wt
 
-            batch.append((
-                pdb_complex, pdb_id, chain1, chain2,
-                row['Mutation(s)_PDB'], row['Mutation(s)_cleaned'],
-                row.get('iMutation_Location(s)', ''),
-                row.get('Protein 1', ''), row.get('Protein 2', ''),
-                kd_mut, kd_wt, ddG,
-                safe_float(row['kon_mut_parsed']), safe_float(row['kon_wt_parsed']),
-                koff_mut, koff_wt, koff_ratio,
-                safe_float(row.get('dH_mut (kcal mol^(-1))')),
-                safe_float(row.get('dH_wt (kcal mol^(-1))')),
-                safe_float(row['Temperature']),
-                row.get('Method', ''), row.get('Reference', ''),
-                int(row.get('SKEMPI version', 1) or 1)
-            ))
+            batch.append(
+                (
+                    pdb_complex,
+                    pdb_id,
+                    chain1,
+                    chain2,
+                    row["Mutation(s)_PDB"],
+                    row["Mutation(s)_cleaned"],
+                    row.get("iMutation_Location(s)", ""),
+                    row.get("Protein 1", ""),
+                    row.get("Protein 2", ""),
+                    kd_mut,
+                    kd_wt,
+                    ddG,
+                    safe_float(row["kon_mut_parsed"]),
+                    safe_float(row["kon_wt_parsed"]),
+                    koff_mut,
+                    koff_wt,
+                    koff_ratio,
+                    safe_float(row.get("dH_mut (kcal mol^(-1))")),
+                    safe_float(row.get("dH_wt (kcal mol^(-1))")),
+                    safe_float(row["Temperature"]),
+                    row.get("Method", ""),
+                    row.get("Reference", ""),
+                    int(row.get("SKEMPI version", 1) or 1),
+                )
+            )
 
-    conn.executemany("""
+    conn.executemany(
+        """
         INSERT INTO skempi_mutations
           (pdb_complex, pdb_id, chain1, chain2,
            mutation_pdb, mutation_clean, location,
@@ -232,11 +282,14 @@ def load_skempi(conn):
            kon_mut, kon_wt, koff_mut, koff_wt, koff_ratio,
            dH_mut, dH_wt, temperature, method, reference, skempi_version)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, batch)
+    """,
+        batch,
+    )
     conn.commit()
     rows_inserted = len(batch)
     print(f"  Inserted {rows_inserted} SKEMPI records")
     return rows_inserted
+
 
 # ── load PDB structures ────────────────────────────────────────────────────────
 def load_pdb_structures(conn):
@@ -246,22 +299,26 @@ def load_pdb_structures(conn):
 
     # Get protein names from SKEMPI for each PDB
     pdb_proteins = {}
-    cur = conn.execute("SELECT DISTINCT pdb_id, protein1, protein2 FROM skempi_mutations")
+    cur = conn.execute(
+        "SELECT DISTINCT pdb_id, protein1, protein2 FROM skempi_mutations"
+    )
     for row in cur:
         pid = row[0]
         pdb_proteins.setdefault(pid, set())
-        if row[1]: pdb_proteins[pid].add(row[1])
-        if row[2]: pdb_proteins[pid].add(row[2])
+        if row[1]:
+            pdb_proteins[pid].add(row[1])
+        if row[2]:
+            pdb_proteins[pid].add(row[2])
 
     inserted = 0
     residue_batch = []
 
     for pdb_path in pdb_files:
         pdb_id = pdb_path.stem
-        mapping_path = pdb_path.with_suffix('.mapping')
+        mapping_path = pdb_path.with_suffix(".mapping")
 
         sequences = parse_sequence_from_pdb(pdb_path)
-        mapping   = parse_mapping(mapping_path) if mapping_path.exists() else {}
+        mapping = parse_mapping(mapping_path) if mapping_path.exists() else {}
 
         if not sequences:
             continue
@@ -275,17 +332,26 @@ def load_pdb_structures(conn):
             "SELECT COUNT(*) FROM skempi_mutations WHERE pdb_id=?", (pdb_id,)
         ).fetchone()[0]
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO pdb_structures
               (pdb_id, chains, sequences, n_residues, n_mutations, proteins)
             VALUES (?,?,?,?,?,?)
-        """, (pdb_id, json.dumps(chains), json.dumps(sequences),
-              n_residues, n_muts, json.dumps(proteins)))
+        """,
+            (
+                pdb_id,
+                json.dumps(chains),
+                json.dumps(sequences),
+                n_residues,
+                n_muts,
+                json.dumps(proteins),
+            ),
+        )
 
         # Build residue table from mapping
         for chain, residues in mapping.items():
-            for (resname, ch, pdb_num, seq_num) in residues:
-                aa = THREE_TO_ONE.get(resname, 'X')
+            for resname, ch, pdb_num, seq_num in residues:
+                aa = THREE_TO_ONE.get(resname, "X")
                 residue_batch.append((pdb_id, ch, pdb_num, seq_num, aa))
 
         inserted += 1
@@ -293,12 +359,16 @@ def load_pdb_structures(conn):
             print(f"  Parsed {inserted}/{len(pdb_files)} structures...")
 
     # Batch insert residues
-    conn.executemany("""
+    conn.executemany(
+        """
         INSERT INTO pdb_residues (pdb_id, chain, pdb_resnum, seq_num, residue_aa)
         VALUES (?,?,?,?,?)
-    """, residue_batch)
+    """,
+        residue_batch,
+    )
     conn.commit()
     print(f"  Inserted {inserted} PDB structures, {len(residue_batch)} residue records")
+
 
 # ── mark interface residues using SKEMPI location field ───────────────────────
 def mark_interface_residues(conn):
@@ -312,39 +382,56 @@ def mark_interface_residues(conn):
     interface_set = set()
     for row in cur:
         pdb_id, mut_clean, loc = row
-        if loc in ('COR', 'RIM'):
+        if loc in ("COR", "RIM"):
             # Parse mutation string e.g. "LA38G" → chain=L, pos=38
-            for mut in mut_clean.split(','):
+            for mut in mut_clean.split(","):
                 mut = mut.strip()
                 if len(mut) >= 3:
                     chain = mut[1]
-                    pos_str = ''.join(c for c in mut[2:-1] if c.isdigit())
+                    pos_str = "".join(c for c in mut[2:-1] if c.isdigit())
                     if pos_str:
                         interface_set.add((pdb_id, chain, int(pos_str)))
 
     batch = list(interface_set)
-    conn.executemany("""
+    conn.executemany(
+        """
         UPDATE pdb_residues SET is_interface=1
         WHERE pdb_id=? AND chain=? AND seq_num=?
-    """, batch)
+    """,
+        batch,
+    )
     conn.commit()
     print(f"  Marked {len(batch)} interface residue positions")
+
 
 # ── statistics ────────────────────────────────────────────────────────────────
 def print_stats(conn):
     stats = {
-        "skempi_total":   conn.execute("SELECT COUNT(*) FROM skempi_mutations").fetchone()[0],
-        "with_ddG":       conn.execute("SELECT COUNT(*) FROM skempi_mutations WHERE ddG_kcal IS NOT NULL").fetchone()[0],
-        "with_koff":      conn.execute("SELECT COUNT(*) FROM skempi_mutations WHERE koff_ratio IS NOT NULL").fetchone()[0],
-        "pdb_structures": conn.execute("SELECT COUNT(*) FROM pdb_structures").fetchone()[0],
-        "residues":       conn.execute("SELECT COUNT(*) FROM pdb_residues").fetchone()[0],
-        "interface_res":  conn.execute("SELECT COUNT(*) FROM pdb_residues WHERE is_interface=1").fetchone()[0],
-        "hotspots":       conn.execute("SELECT COUNT(*) FROM skempi_mutations WHERE ddG_kcal > 1.0").fetchone()[0],
+        "skempi_total": conn.execute(
+            "SELECT COUNT(*) FROM skempi_mutations"
+        ).fetchone()[0],
+        "with_ddG": conn.execute(
+            "SELECT COUNT(*) FROM skempi_mutations WHERE ddG_kcal IS NOT NULL"
+        ).fetchone()[0],
+        "with_koff": conn.execute(
+            "SELECT COUNT(*) FROM skempi_mutations WHERE koff_ratio IS NOT NULL"
+        ).fetchone()[0],
+        "pdb_structures": conn.execute(
+            "SELECT COUNT(*) FROM pdb_structures"
+        ).fetchone()[0],
+        "residues": conn.execute("SELECT COUNT(*) FROM pdb_residues").fetchone()[0],
+        "interface_res": conn.execute(
+            "SELECT COUNT(*) FROM pdb_residues WHERE is_interface=1"
+        ).fetchone()[0],
+        "hotspots": conn.execute(
+            "SELECT COUNT(*) FROM skempi_mutations WHERE ddG_kcal > 1.0"
+        ).fetchone()[0],
     }
     print("\n=== Database Statistics ===")
     for k, v in stats.items():
         print(f"  {k:20s}: {v:,}")
     return stats
+
 
 # ── main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -365,4 +452,6 @@ if __name__ == "__main__":
     stats = print_stats(conn)
     conn.close()
 
-    print(f"\n✅ Database built at {DB_PATH} ({DB_PATH.stat().st_size/1024/1024:.1f} MB)")
+    print(
+        f"\n✅ Database built at {DB_PATH} ({DB_PATH.stat().st_size / 1024 / 1024:.1f} MB)"
+    )

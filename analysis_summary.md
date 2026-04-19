@@ -24,5 +24,59 @@
   2. $F_2$: 免疫原性（越低越好，代表安全性高）
   3. $F_3$: 聚集傾向（越低越好，代表成藥性佳）
 
+## 4. 輔助計算工具
+
+* **分子量 (`calc_mw`)**：根據各胺基酸殘基質量加總，換算為 kDa。
+* **平均疏水性 (`calc_hydrophobicity`)**：採用 Kyte-Doolittle 量表計算序列平均疏水性。
+* **氫鍵估算 (`_estimate_hbonds`)**：統計序列中氫鍵供體（STNQHRKYW）與受體（STNQDEHKRY）殘基數量，以 0.6 係數估算總氫鍵數。
+* **BLOSUM 替換分數 (`blosum_score`)**：根據電荷族群、極性、體積差異、疏水性差異，計算-4 ～ +4 的保守性替換分數（近似 BLOSUM62）。
+
+## 5. 變異體生成流程 (`generate_variants`)
+
+基於丙氨酸掃描的熱點與 warm 位置（最多取前 15 個），依三種策略生成最多 80 個變異體（另加 WT 基準）：
+
+* **conservative**：以 BLOSUM 分數為依據，偏好保守性替換（取分數最高的 6 個候選胺基酸）。
+* **aggressive**：優先挑選 SKEMPI 數據顯示 ΔΔG < −0.3 kcal/mol 的強化結合替換。
+* **mixed（預設）**：60% 機率採 SKEMPI 引導，40% 採 BLOSUM 保守替換，兼顧探索與穩定性。
+
+每個變異體的突變數以機率分布決定（40% 單突變、最多 3 個突變），隨機種子固定為 42 以確保可重現性。
+
+## 6. 變異體評分 (`score_variants`)
+
+對所有生成的變異體計算以下指標：
+
+| 指標 | 說明 |
+| --- | --- |
+| `ddG_binding` | 各突變 ΔΔG 加總（結合自由能變化） |
+| `ddG_stability` | 穩定性 ΔΔG（以 0.4 權重計） |
+| `koff_relative` | 各突變 $k_{off}$ ratio 連乘（限縮至 0.001–1000） |
+| `residence_time` | 藥物停留時間估算（= 10 / koff_relative） |
+| 免疫原性 / 聚集 / 溶解度 / pI / MW / 氫鍵 | 物化特性完整計算 |
+| `skempi_support` | 此變異體有 SKEMPI 實驗數據支撐的突變數量 |
+
+若 PDB 介面資訊可用，會以實際介面殘基位置判斷 `is_interface`，否則退回以序列位置比例估算。
+
+## 7. 完整優化 Pipeline (`run_optimization`)
+
+串接上述所有步驟的主入口函式，執行順序如下：
+
+1. 序列清洗與驗證（移除非標準胺基酸，最短 6 個殘基）
+2. `find_closest_pdb` → 取得最佳 PDB 比對
+3. `alanine_scan` → 找出熱點位置
+4. `generate_variants` → 生成候選變異體
+5. `score_variants` → 全面評分
+6. `pareto_optimize` → Pareto 排序
+7. 依（Pareto 排名, ΔΔG）排序，回傳前 50 名候選
+8. `_save_session` → 將結果寫入 SQLite（`analysis_sessions` + `candidates` 表）
+
+## 8. 資料持久化 (`_save_session`)
+
+每次分析結果存入本地 SQLite（`skempi.db`），包含：
+
+* `analysis_sessions`：session 元數據（序列、名稱、目標蛋白、執行時間、PDB 比對結果）
+* `candidates`：每個候選變異體的完整指標，及一個**複合分數**（`score_composite`）：
+
+$$\text{score} = -\Delta\Delta G_{\text{bind}} \times 0.4 + (-\ln k_{\text{off}}) \times 0.3 + (1 - \text{immunogenicity}) \times 0.15 + \text{solubility} \times 0.15$$
+
 ## 總結
-此模組主要是透過**已知實驗數據驅動的統計模型**搭配**結構與物理化學演算法**，篩選並預測出親和力更強且更容易開發成實際藥物的蛋白質變異體。
+此模組主要是透過**已知實驗數據驅動的統計模型**搭配**結構與物理化學演算法**，篩選並預測出親和力更強且更容易開發成實際藥物的蛋白質變異體。整體流程從序列輸入到 Pareto 最佳化結果輸出，完全在本地執行並持久化至 SQLite，無需外部 API 依賴。

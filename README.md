@@ -17,8 +17,8 @@
 2. **下載 SKEMPI 2.0 PDB 結構文件**
    ```bash
    # 下載 PDB 壓縮檔並解壓縮到專案根目錄的 PDBs 資料夾
-   curl -o skempi_v2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/skempi_v2_PDBs.tgz
-   tar -xzf skempi_v2_PDBs.tgz
+   curl -o SKEMPI2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/SKEMPI2_PDBs.tgz
+   tar -xzf SKEMPI2_PDBs.tgz
    # 確保解壓縮後的目錄名稱為 PDBs，與 build_database.py 設定一致
    ```
 

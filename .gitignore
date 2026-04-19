@@ -1,3 +1,5 @@
 *.db
 skempi_v2.csv
 SKEMPI2_PDBs.tgz
+PDBs/
+._PDBs

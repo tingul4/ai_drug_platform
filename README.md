@@ -4,6 +4,33 @@
 
 ---
 
+## 重建資料庫
+
+若需重建資料庫或初次設定環境，請按照以下步驟下載 SKEMPI 2.0 數據：
+
+1. **下載 SKEMPI 2.0 實驗數據表**
+   ```bash
+   # 下載 skempi_v2.csv 到專案根目錄
+   curl -o skempi_v2.csv https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv
+   ```
+
+2. **下載 SKEMPI 2.0 PDB 結構文件**
+   ```bash
+   # 下載 PDB 壓縮檔並解壓縮到專案根目錄的 PDBs 資料夾
+   curl -o skempi_v2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/skempi_v2_PDBs.tgz
+   tar -xzf skempi_v2_PDBs.tgz
+   # 確保解壓縮後的目錄名稱為 PDBs，與 build_database.py 設定一致
+   ```
+
+3. **執行重建腳本**
+   確保你的 `skempi_v2.csv` 和 `PDBs` 資料夾都在專案根目錄下，然後執行：
+   ```bash
+   python db/build_database.py
+   ```
+
+
+---
+
 ## 快速啟動
 
 ### macOS / Linux
@@ -82,32 +109,6 @@ ai_drug_platform/
 | GET | /api/skempi/search | 搜尋 SKEMPI 記錄 |
 | GET | /api/pdb/\<pdb_id\> | 取得 PDB 結構資訊 |
 | GET | /api/skempi/distribution | ddG 分佈（圖表用） |
-
----
-
-## 重建資料庫
-
-若需重建資料庫或初次設定環境，請按照以下步驟下載 SKEMPI 2.0 數據：
-
-1. **下載 SKEMPI 2.0 實驗數據表**
-   ```bash
-   # 下載 skempi_v2.csv 到專案根目錄
-   curl -o skempi_v2.csv https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv
-   ```
-
-2. **下載 SKEMPI 2.0 PDB 結構文件**
-   ```bash
-   # 下載 PDB 壓縮檔並解壓縮到專案根目錄的 PDBs 資料夾
-   curl -o skempi_v2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/skempi_v2_PDBs.tgz
-   tar -xzf skempi_v2_PDBs.tgz
-   # 確保解壓縮後的目錄名稱為 PDBs，與 build_database.py 設定一致
-   ```
-
-3. **執行重建腳本**
-   確保你的 `skempi_v2.csv` 和 `PDBs` 資料夾都在專案根目錄下，然後執行：
-   ```bash
-   python db/build_database.py
-   ```
 
 ---
 

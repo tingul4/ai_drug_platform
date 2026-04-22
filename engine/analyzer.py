@@ -18,6 +18,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 DB_PATH = Path(__file__).parent.parent / "db" / "skempi.db"
+IEDB_PSSM_PATH = Path(__file__).parent.parent / "dataset" / "iedb_mhcii_2010" / "pssm.json"
 
 # ─── amino acid property tables ──────────────────────────────────────────────
 AA_PROPS = {
@@ -133,6 +134,7 @@ def calc_immunogenicity(sequence, mutations=None):
     """
     NetMHCpan-inspired immunogenicity risk (0-1).
     Based on MHC-II binding hotspot amino acid composition.
+    Legacy heuristic — retained for comparison with the PSSM model.
     """
     # MHC-II anchor positions prefer hydrophobic/aromatic residues
     high_risk = set('WFYLIMV')
@@ -158,6 +160,84 @@ def calc_immunogenicity(sequence, mutations=None):
                     risk += 0.02
 
     return round(min(risk, 1.0), 3)
+
+
+# ─── IEDB-calibrated MHC-II PSSM immunogenicity model ────────────────────────
+class IEDBImmunoModel:
+    """
+    MHC-II T-cell epitope risk model built from the IEDB 2010 binding-affinity
+    benchmark (44,541 measurements, 26 HLA-DR/DP/DQ alleles).
+
+    risk ∈ [0, 1] = fraction of 9-mer windows whose PSSM score exceeds the
+    binder-median anchor, blended with the max-window score rescaled between
+    binder p05 and p95.
+    """
+    def __init__(self, pssm_path=IEDB_PSSM_PATH):
+        self.loaded = False
+        if not pssm_path.exists():
+            return
+        data = json.loads(pssm_path.read_text())
+        self.window = data["window"]
+        self.aa_idx = {a: i for i, a in enumerate(data["amino_acids"])}
+        self.pssm = data["pssm"]
+        self.anchors = data["anchors"]
+        self.source = data.get("source", "IEDB 2010")
+        self.n_binder = data.get("n_binder_peptides")
+        self.n_nonbinder = data.get("n_nonbinder_peptides")
+        self.loaded = True
+
+    def score_window(self, window):
+        s = 0.0
+        for pos, aa in enumerate(window):
+            i = self.aa_idx.get(aa)
+            if i is None:
+                return None
+            s += self.pssm[pos][i]
+        return s
+
+    def score_sequence(self, sequence):
+        """Return (risk_0_1, n_hot_windows, max_window_score, hot_peptides)."""
+        if not self.loaded or len(sequence) < self.window:
+            return None
+        w = self.window
+        scores = []
+        hot = []
+        med = self.anchors["binder_p50"]
+        for i in range(len(sequence) - w + 1):
+            win = sequence[i:i+w]
+            s = self.score_window(win)
+            if s is None:
+                continue
+            scores.append(s)
+            if s >= med:
+                hot.append((i + 1, win, round(s, 3)))
+        if not scores:
+            return None
+        max_s = max(scores)
+        p05 = self.anchors["binder_p05"]
+        p95 = self.anchors["binder_p95"]
+        # Max-window component, rescaled into [0, 1]
+        max_component = (max_s - p05) / max(p95 - p05, 1e-6)
+        max_component = max(0.0, min(1.0, max_component))
+        # Density component: how many windows look like binders
+        density = len(hot) / len(scores)
+        risk = 0.6 * max_component + 0.4 * density
+        return {
+            "risk":           round(min(max(risk, 0.0), 1.0), 3),
+            "n_hot_windows":  len(hot),
+            "n_windows":      len(scores),
+            "max_score":      round(max_s, 3),
+            "top_hits":       sorted(hot, key=lambda x: -x[2])[:5],
+        }
+
+
+def calc_immunogenicity_pssm(sequence, model: "IEDBImmunoModel"):
+    """Return a 0-1 risk score using the IEDB PSSM. Falls back to heuristic
+    if the PSSM asset is missing."""
+    if model is None or not getattr(model, "loaded", False):
+        return calc_immunogenicity(sequence)
+    r = model.score_sequence(sequence)
+    return r["risk"] if r else calc_immunogenicity(sequence)
 
 # ─── SKEMPI-calibrated ddG model ─────────────────────────────────────────────
 class SKEMPIModel:
@@ -277,11 +357,37 @@ class SKEMPIModel:
 # ─── main analyzer class ──────────────────────────────────────────────────────
 class ProteinOptimizer:
 
-    def __init__(self):
+    def __init__(self, immuno_mode='pssm'):
+        """
+        immuno_mode:
+          'heuristic' – original MHC-II anchor hotspot rule
+          'pssm'      – IEDB 2010 9-mer PSSM (default)
+          'hybrid'    – 0.5 * heuristic + 0.5 * pssm
+        """
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.model = SKEMPIModel(self.conn)
+        self.iedb = IEDBImmunoModel()
+        if not self.iedb.loaded and immuno_mode != 'heuristic':
+            print("[ProteinOptimizer] IEDB PSSM asset missing — "
+                  "falling back to heuristic immunogenicity.")
+            immuno_mode = 'heuristic'
+        self.immuno_mode = immuno_mode
+        print(f"[ProteinOptimizer] immunogenicity mode = {self.immuno_mode}"
+              + (f" (IEDB PSSM: {self.iedb.n_binder} binders / "
+                 f"{self.iedb.n_nonbinder} non-binders)" if self.iedb.loaded else ""))
+
+    def score_immunogenicity(self, sequence, mutations=None):
+        """Unified entry — dispatches by self.immuno_mode."""
+        if self.immuno_mode == 'heuristic' or not self.iedb.loaded:
+            return calc_immunogenicity(sequence, mutations)
+        pssm_risk = calc_immunogenicity_pssm(sequence, self.iedb)
+        if self.immuno_mode == 'pssm':
+            return pssm_risk
+        # hybrid
+        heur = calc_immunogenicity(sequence, mutations)
+        return round(0.5 * pssm_risk + 0.5 * heur, 3)
 
     # ── 1. find closest PDB structure ─────────────────────────────────────
     def find_closest_pdb(self, query_seq, top_k=5):
@@ -472,7 +578,7 @@ class ProteinOptimizer:
                     'ddG_stability':   0.0,
                     'koff_relative':   1.0,
                     'residence_time':  10.0,
-                    'immunogenicity':  calc_immunogenicity(seq),
+                    'immunogenicity':  self.score_immunogenicity(seq),
                     'aggregation':     calc_aggregation(seq),
                     'solubility':      calc_solubility(seq),
                     'pI':              calc_pI(seq),
@@ -516,7 +622,7 @@ class ProteinOptimizer:
                 'ddG_stability':  round(total_ddG_stab, 3),
                 'koff_relative':  round(total_koff, 4),
                 'residence_time': residence,
-                'immunogenicity': calc_immunogenicity(seq, muts),
+                'immunogenicity': self.score_immunogenicity(seq, muts),
                 'aggregation':    calc_aggregation(seq),
                 'solubility':     calc_solubility(seq),
                 'pI':             calc_pI(seq),
@@ -624,13 +730,17 @@ class ProteinOptimizer:
 
     # ── 7. full pipeline ──────────────────────────────────────────────────
     def run_optimization(self, sequence, name="Query", target="Unknown",
-                         max_variants=80, strategy='mixed'):
+                         max_variants=80, strategy='mixed', immuno_mode=None):
         """
         Run the full 3-tool parallel optimization pipeline.
         Returns a result dict suitable for API serialization.
         """
         t0 = time.time()
         session_id = str(uuid.uuid4())[:8]
+        if immuno_mode and immuno_mode in ('heuristic', 'pssm', 'hybrid'):
+            if immuno_mode != 'heuristic' and not self.iedb.loaded:
+                immuno_mode = 'heuristic'
+            self.immuno_mode = immuno_mode
 
         # Clean + validate sequence
         sequence = sequence.upper().replace(' ','').replace('\n','')
@@ -662,6 +772,25 @@ class ProteinOptimizer:
         )
         wt_entry = next((v for v in scored if v.get('is_wt')), None)
 
+        # Build an immunogenicity comparison panel for the WT sequence
+        # (lets users compare heuristic vs IEDB-PSSM side-by-side).
+        immuno_detail = {
+            'mode':             self.immuno_mode,
+            'heuristic_risk':   calc_immunogenicity(sequence),
+            'pssm_risk':        None,
+            'pssm_top_hits':    [],
+            'pssm_n_hot':       0,
+            'pssm_n_windows':   0,
+            'pssm_source':      self.iedb.source if self.iedb.loaded else None,
+        }
+        if self.iedb.loaded:
+            r = self.iedb.score_sequence(sequence)
+            if r:
+                immuno_detail['pssm_risk']      = r['risk']
+                immuno_detail['pssm_top_hits']  = r['top_hits']
+                immuno_detail['pssm_n_hot']     = r['n_hot_windows']
+                immuno_detail['pssm_n_windows'] = r['n_windows']
+
         t1 = time.time()
         runtime = round(t1 - t0, 2)
 
@@ -688,6 +817,7 @@ class ProteinOptimizer:
             'wt_baseline':   wt_entry,
             'candidates':    non_wt_sorted[:50],
             'n_pareto1':     sum(1 for v in non_wt_sorted if v['pareto_rank'] == 1),
+            'immunogenicity': immuno_detail,
 
             # DB stats
             'skempi_records': self.conn.execute("SELECT COUNT(*) FROM skempi_mutations").fetchone()[0],

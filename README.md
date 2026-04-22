@@ -10,20 +10,19 @@
 
 1. **下載 SKEMPI 2.0 實驗數據表**
    ```bash
-   # 下載 skempi_v2.csv 到專案根目錄
-   curl -o skempi_v2.csv https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv
+   mkdir -p dataset/skempi_v2
+   curl -o dataset/skempi_v2/skempi_v2.csv https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv
    ```
 
 2. **下載 SKEMPI 2.0 PDB 結構文件**
    ```bash
-   # 下載 PDB 壓縮檔並解壓縮到專案根目錄的 PDBs 資料夾
-   curl -o SKEMPI2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/SKEMPI2_PDBs.tgz
-   tar -xzf SKEMPI2_PDBs.tgz
-   # 確保解壓縮後的目錄名稱為 PDBs，與 build_database.py 設定一致
+   curl -o dataset/skempi_v2/SKEMPI2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/SKEMPI2_PDBs.tgz
+   tar -xzf dataset/skempi_v2/SKEMPI2_PDBs.tgz -C dataset/skempi_v2/
+   # 解壓縮後目錄為 dataset/skempi_v2/PDBs，與 build_database.py 設定一致
    ```
 
 3. **執行重建腳本**
-   確保你的 `skempi_v2.csv` 和 `PDBs` 資料夾都在專案根目錄下，然後執行：
+   確保 `dataset/skempi_v2/skempi_v2.csv` 和 `dataset/skempi_v2/PDBs/` 均已就位，然後執行：
    ```bash
    python db/build_database.py
    ```

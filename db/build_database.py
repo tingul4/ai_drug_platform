@@ -17,8 +17,9 @@ from Bio.SeqUtils import seq1
 
 DB_PATH = Path(__file__).parent / "skempi.db"
 PROJECT_ROOT = Path(__file__).parent.parent
-CSV_PATH = PROJECT_ROOT / "skempi_v2.csv"
-PDB_DIR = PROJECT_ROOT / "PDBs"
+SKEMPI_DIR = PROJECT_ROOT / "dataset" / "skempi_v2"
+CSV_PATH = SKEMPI_DIR / "skempi_v2.csv"
+PDB_DIR = SKEMPI_DIR / "PDBs"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 THREE_TO_ONE = {

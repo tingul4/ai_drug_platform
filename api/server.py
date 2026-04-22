@@ -18,6 +18,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 from engine.analyzer import ProteinOptimizer
+from engine import smallmol
 
 DB_PATH      = Path(__file__).parent.parent / "db" / "skempi.db"
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -43,8 +44,44 @@ def api_stats():
     try:
         opt = get_optimizer()
         stats = opt.get_db_stats()
+        stats["iedb_pssm_loaded"]     = opt.iedb.loaded
+        if opt.iedb.loaded:
+            stats["iedb_binders"]     = opt.iedb.n_binder
+            stats["iedb_nonbinders"]  = opt.iedb.n_nonbinder
+            stats["iedb_source"]      = opt.iedb.source
         return jsonify({"ok": True, "stats": stats})
     except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/immuno/score", methods=["POST"])
+def api_immuno_score():
+    """Compare heuristic vs IEDB-PSSM scores for a single sequence."""
+    try:
+        data = request.get_json(force=True)
+        seq = (data or {}).get("sequence", "").strip().upper()
+        seq = "".join(a for a in seq if a.isalpha())
+        if len(seq) < 9:
+            return jsonify({"ok": False, "error": "Sequence must be ≥9 residues"}), 400
+        from engine.analyzer import calc_immunogenicity
+        opt = get_optimizer()
+        out = {
+            "sequence_len":   len(seq),
+            "heuristic_risk": calc_immunogenicity(seq),
+            "pssm_loaded":    opt.iedb.loaded,
+        }
+        if opt.iedb.loaded:
+            r = opt.iedb.score_sequence(seq)
+            if r:
+                out["pssm_risk"]        = r["risk"]
+                out["pssm_top_hits"]    = r["top_hits"]
+                out["pssm_n_hot"]       = r["n_hot_windows"]
+                out["pssm_n_windows"]   = r["n_windows"]
+                out["pssm_max_score"]   = r["max_score"]
+                out["pssm_source"]      = opt.iedb.source
+        return jsonify({"ok": True, "result": _clean(out)})
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -77,13 +114,17 @@ def api_analyze():
         target      = data.get("target", "Unknown Target")[:80]
         strategy    = data.get("strategy", "mixed")
         max_variants = min(int(data.get("max_variants", 80)), 200)
+        immuno_mode = data.get("immuno_mode", "pssm")
 
         if strategy not in ("conservative", "aggressive", "mixed"):
             strategy = "mixed"
+        if immuno_mode not in ("heuristic", "pssm", "hybrid"):
+            immuno_mode = "pssm"
 
         opt    = get_optimizer()
         result = opt.run_optimization(sequence, name=name, target=target,
-                                      max_variants=max_variants, strategy=strategy)
+                                      max_variants=max_variants, strategy=strategy,
+                                      immuno_mode=immuno_mode)
 
         if "error" in result:
             return jsonify({"ok": False, "error": result["error"]}), 400
@@ -221,6 +262,26 @@ def api_skempi_dist():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── small-molecule (KRAS G12D POC) ────────────────────────────────────────────
+@app.route("/api/smallmol/poc")
+def api_smallmol_poc():
+    """Serve cached small-molecule screening results for the KRAS G12D POC."""
+    try:
+        return jsonify({"ok": True, "result": _clean(smallmol.load_poc_results())})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/smallmol/plot")
+def api_smallmol_plot():
+    """Serve the Pareto plot PNG."""
+    p = smallmol.poc_plot_path()
+    if not p.exists():
+        return jsonify({"ok": False, "error": "plot not found"}), 404
+    return send_from_directory(str(p.parent), p.name)
 
 
 # ── serve frontend ────────────────────────────────────────────────────────────

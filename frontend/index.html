@@ -145,6 +145,7 @@ tr:hover td{background:rgba(255,255,255,.03);}
 <div class="nav">
   <div class="nav-tab active" onclick="showPage('optimize',this)">🚀 優化分析</div>
   <div class="nav-tab" onclick="showPage('results',this)">📊 優化結果</div>
+  <div class="nav-tab" onclick="showPage('smallmol',this)">💊 小分子優化 (KRAS G12D)</div>
   <div class="nav-tab" onclick="showPage('skempi',this)">🔬 SKEMPI 資料庫</div>
   <div class="nav-tab" onclick="showPage('history',this)">📋 歷史記錄</div>
   <div class="nav-tab" onclick="showPage('overview',this)">🏗️ 系統架構</div>
@@ -195,6 +196,14 @@ tr:hover td{background:rgba(255,255,255,.03);}
           <option value="40">40 個（快速）</option>
           <option value="80" selected>80 個（建議）</option>
           <option value="150">150 個（深度）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>免疫原性評分模型</label>
+        <select id="inp-immuno">
+          <option value="pssm" selected>🧬 IEDB 2010 PSSM（44K 真實 MHC-II 實驗數據）</option>
+          <option value="heuristic">📐 原始啟發式（MHC-II anchor 疏水熱點）</option>
+          <option value="hybrid">🔀 混合（PSSM 50% + 啟發式 50%）</option>
         </select>
       </div>
 
@@ -281,6 +290,12 @@ tr:hover td{background:rgba(255,255,255,.03);}
       </div>
     </div>
 
+    <!-- Immunogenicity panel (IEDB PSSM vs heuristic) -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">🧬 免疫原性模型對照（IEDB 2010 PSSM vs 啟發式）</div>
+      <div id="immuno-panel-content"></div>
+    </div>
+
     <!-- Pareto + Radar -->
     <div class="grid-2">
       <div class="card">
@@ -334,6 +349,67 @@ tr:hover td{background:rgba(255,255,255,.03);}
     <div class="card" id="evidence-card">
       <div class="card-title">📚 SKEMPI 2.0 實驗證據（Top 候選物突變）</div>
       <div id="evidence-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======= PAGE: SMALL MOLECULE (KRAS G12D POC) ======= -->
+<div class="page" id="page-smallmol">
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title">💊 小分子優化 Pipeline — KRAS G12D (PDB 7RPZ)</div>
+    <div style="font-size:.82rem;color:var(--muted);line-height:1.7;">
+      目標：PDAC（胰臟癌）最常見突變 <b>KRAS G12D</b>（UniProt P01116，PDB <b>7RPZ</b> + 共結晶 MRTX1133）。<br>
+      Pipeline：<code>RDKit 3D embed → Meeko PDBQT → AutoDock Vina docking → ADMET-AI (GAT) → koff descriptor proxy → PyMOO NSGA-II 非支配排序</code>
+    </div>
+    <div style="margin-top:10px;">
+      <button class="btn btn-primary btn-sm" onclick="loadSmallMolPOC()">📥 載入 POC 結果</button>
+      <span id="smallmol-status" style="margin-left:10px;font-size:.78rem;color:var(--muted);"></span>
+    </div>
+  </div>
+
+  <div id="smallmol-results" style="display:none;">
+    <div class="grid-2" style="margin-bottom:14px;">
+      <div class="card">
+        <div class="card-title">📈 Pareto Front — pKd vs hERG</div>
+        <div class="chart-wrap"><canvas id="smallmol-chart-herg"></canvas></div>
+        <div class="legend" style="font-size:.72rem;color:var(--muted);margin-top:6px;">
+          右上＝親和力高但心毒性高；左上＝安全又有親和力（理想區）。
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📈 Pareto Front — pKd vs koff proxy</div>
+        <div class="chart-wrap"><canvas id="smallmol-chart-koff"></canvas></div>
+        <div class="legend" style="font-size:.72rem;color:var(--muted);margin-top:6px;">
+          koff proxy 越高 → 停留時間越長（偏好右上）。
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title">📊 Summary Table（對應 Aim3 PDF）</div>
+      <div class="search-input-wrap" style="margin-bottom:8px;">
+        <button class="btn btn-outline btn-sm" onclick="smFilter('all')">全部</button>
+        <button class="btn btn-outline btn-sm" onclick="smFilter('pareto')">只看 Pareto Front</button>
+        <span id="smallmol-count" style="font-size:.78rem;color:var(--muted);margin-left:auto;"></span>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th><th>ID</th><th>分子</th>
+              <th>pIC50</th><th>pKd</th><th>koff</th>
+              <th>LogP</th><th>hERG</th><th>CYP3A4</th>
+              <th>SMILES</th>
+            </tr>
+          </thead>
+          <tbody id="smallmol-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🖼️ Pipeline 產出圖（靜態 PNG）</div>
+      <img src="/api/smallmol/plot" alt="Pareto plot" style="max-width:100%;border-radius:6px;border:1px solid var(--border);">
     </div>
   </div>
 </div>
@@ -520,6 +596,7 @@ async function runAnalysis() {
   const target   = document.getElementById('inp-target').value.trim() || 'Unknown';
   const strategy = document.getElementById('inp-strategy').value;
   const nvar     = parseInt(document.getElementById('inp-variants').value);
+  const immuno   = document.getElementById('inp-immuno').value;
 
   document.getElementById('error-box').style.display = 'none';
   if (!seq || seq.length < 6) {
@@ -552,7 +629,7 @@ async function runAnalysis() {
     const resp = await fetch(`${API}/api/analyze`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({sequence:seq, name, target, strategy, max_variants:nvar})
+      body: JSON.stringify({sequence:seq, name, target, strategy, max_variants:nvar, immuno_mode: immuno})
     });
     const data = await resp.json();
     clearInterval(timer);
@@ -606,6 +683,29 @@ function destroyChart(id) {
   if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; }
 }
 
+function renderImmunoPanel(d) {
+  const host = document.getElementById('immuno-panel-content');
+  if (!host) return;
+  if (!d) { host.innerHTML = '<div style="color:var(--muted);">尚無免疫原性資料</div>'; return; }
+  const modeLabel = {heuristic:'啟發式（MHC-II anchor）', pssm:'IEDB PSSM', hybrid:'混合'}[d.mode] || d.mode;
+  const pssmLine = (d.pssm_risk === null || d.pssm_risk === undefined)
+    ? '<span style="color:var(--muted);">（PSSM 資料未載入，回退啟發式）</span>'
+    : `<span class="pill ${d.pssm_risk<0.4?'pill-green':d.pssm_risk>0.7?'pill-red':'pill-yellow'}">${d.pssm_risk.toFixed(3)}</span>`;
+  const heurLine = `<span class="pill ${d.heuristic_risk<0.4?'pill-green':d.heuristic_risk>0.7?'pill-red':'pill-yellow'}">${d.heuristic_risk.toFixed(3)}</span>`;
+  const hits = (d.pssm_top_hits || []).map(h =>
+    `<div class="info-row"><span>pos ${h[0]}</span><code style="color:#c4b5fd;">${h[1]}</code><span style="color:#fbbf24;">${h[2]}</span></div>`
+  ).join('') || '<div style="color:var(--muted);font-size:.78rem;">無高分 9-mer 窗口</div>';
+  host.innerHTML = `
+    <div class="info-row"><span>使用模式</span><span class="pill pill-blue">${modeLabel}</span></div>
+    <div class="info-row"><span>啟發式風險</span>${heurLine}</div>
+    <div class="info-row"><span>IEDB PSSM 風險</span>${pssmLine}</div>
+    <div class="info-row"><span>熱點 9-mer 窗口</span><span style="color:#34d399;">${d.pssm_n_hot||0} / ${d.pssm_n_windows||0}</span></div>
+    <div style="margin-top:10px;font-size:.78rem;color:var(--muted);">資料來源：${d.pssm_source||'—'}</div>
+    <div style="margin-top:10px;font-size:.82rem;">Top 5 疑似 MHC-II epitope：</div>
+    ${hits}
+  `;
+}
+
 function renderResults(r) {
   document.getElementById('no-results').style.display = 'none';
   document.getElementById('results-content').style.display = 'block';
@@ -621,6 +721,9 @@ function renderResults(r) {
     <div class="stat-card"><div class="stat-val" style="color:#6366f1;">${top ? top.ddG_binding.toFixed(2) : 'N/A'}</div><div class="stat-lbl">最佳 ΔΔG</div></div>
     <div class="stat-card"><div class="stat-val" style="color:#34d399;">${r.runtime_sec||0}s</div><div class="stat-lbl">分析耗時</div></div>
   `;
+
+  // Immunogenicity detail panel (heuristic vs IEDB-PSSM)
+  renderImmunoPanel(r.immunogenicity);
 
   // PDB match
   const pdbHtml = r.matched_pdb ? `
@@ -971,6 +1074,108 @@ setInterval(loadStats, 15000);
 
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.borderColor = '#2d3154';
+
+// ── small molecule (KRAS G12D POC) ───────────────────────────────────────────
+let smallMolAll = [];
+let smallMolFilter = 'all';
+
+async function loadSmallMolPOC() {
+  const statusEl = document.getElementById('smallmol-status');
+  statusEl.textContent = '載入中…';
+  try {
+    const data = await fetch(`${API}/api/smallmol/poc`).then(r => r.json());
+    if (!data.ok) { statusEl.textContent = '❌ ' + data.error; return; }
+    const r = data.result;
+    smallMolAll = r.candidates;
+    statusEl.textContent = `✅ ${r.target.name} | ${r.n_candidates} 個候選，Pareto Front ${r.n_pareto_front} 個`;
+    document.getElementById('smallmol-results').style.display = 'block';
+    renderSmallMolCharts(smallMolAll);
+    renderSmallMolTable();
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+  }
+}
+
+function smFilter(mode) {
+  smallMolFilter = mode;
+  renderSmallMolTable();
+}
+
+function renderSmallMolTable() {
+  const data = smallMolFilter === 'pareto'
+    ? smallMolAll.filter(c => c.pareto_rank === 0)
+    : smallMolAll;
+  const countEl = document.getElementById('smallmol-count');
+  countEl.textContent = `顯示 ${data.length} / ${smallMolAll.length}`;
+
+  const rows = [...data].sort((a,b) => a.pareto_rank - b.pareto_rank || b.pKd - a.pKd);
+  document.getElementById('smallmol-tbody').innerHTML = rows.map(c => {
+    const r = c.pareto_rank;
+    const rCls = r === 0 ? 'pill-green' : r <= 2 ? 'pill-yellow' : 'pill-gray';
+    const rLabel = r === 0 ? 'Front' : `rank ${r+1}`;
+    const hCls = c.hERG_risk === 'Low' ? 'pill-green' : 'pill-red';
+    const cCls = c.CYP3A4_inhibition === 'No' ? 'pill-green' : 'pill-red';
+    const kCls = c.koff.includes('Low') ? 'pill-green'
+               : c.koff.includes('Medium') ? 'pill-yellow' : 'pill-red';
+    const smi = (c.smiles || '').length > 40 ? c.smiles.slice(0, 40) + '…' : c.smiles;
+    return `<tr>
+      <td><span class="pill ${rCls}">${rLabel}</span></td>
+      <td>${c.id}</td><td>${c.name}</td>
+      <td>${c.pIC50?.toFixed(2)}</td>
+      <td>${c.pKd?.toFixed(2)}</td>
+      <td><span class="pill ${kCls}">${c.koff}</span></td>
+      <td>${c.LogP?.toFixed(2)}</td>
+      <td><span class="pill ${hCls}">${c.hERG_risk}</span></td>
+      <td><span class="pill ${cCls}">${c.CYP3A4_inhibition}</span></td>
+      <td style="font-family:monospace;font-size:.7rem;color:var(--muted);" title="${c.smiles}">${smi}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSmallMolCharts(cands) {
+  const frontPts = cands.filter(c => c.pareto_rank === 0);
+  const otherPts = cands.filter(c => c.pareto_rank > 0);
+
+  if (chartInstances['smallmol-chart-herg']) chartInstances['smallmol-chart-herg'].destroy();
+  chartInstances['smallmol-chart-herg'] = new Chart('smallmol-chart-herg', {
+    type: 'scatter',
+    data: { datasets: [
+      { label: 'Pareto Front',
+        data: frontPts.map(c => ({ x: c.hERG, y: c.pKd, id: c.id, name: c.name })),
+        backgroundColor: 'rgba(239,68,68,.85)', pointRadius: 8, borderColor: '#fff', borderWidth: 1 },
+      { label: 'Dominated',
+        data: otherPts.map(c => ({ x: c.hERG, y: c.pKd, id: c.id, name: c.name })),
+        backgroundColor: 'rgba(99,102,241,.45)', pointRadius: 5 },
+    ]},
+    options: {
+      plugins: { tooltip: { callbacks: { label: ctx => `${ctx.raw.name}: hERG=${ctx.raw.x.toFixed(3)}, pKd=${ctx.raw.y.toFixed(2)}` } } },
+      scales: {
+        x: { title: { display: true, text: 'hERG prob (lower = safer)' } },
+        y: { title: { display: true, text: 'pKd (higher = better)' } },
+      },
+    },
+  });
+
+  if (chartInstances['smallmol-chart-koff']) chartInstances['smallmol-chart-koff'].destroy();
+  chartInstances['smallmol-chart-koff'] = new Chart('smallmol-chart-koff', {
+    type: 'scatter',
+    data: { datasets: [
+      { label: 'Pareto Front',
+        data: frontPts.map(c => ({ x: c.koff_proxy_score, y: c.pKd, id: c.id, name: c.name })),
+        backgroundColor: 'rgba(239,68,68,.85)', pointRadius: 8, borderColor: '#fff', borderWidth: 1 },
+      { label: 'Dominated',
+        data: otherPts.map(c => ({ x: c.koff_proxy_score, y: c.pKd, id: c.id, name: c.name })),
+        backgroundColor: 'rgba(99,102,241,.45)', pointRadius: 5 },
+    ]},
+    options: {
+      plugins: { tooltip: { callbacks: { label: ctx => `${ctx.raw.name}: koff=${ctx.raw.x.toFixed(3)}, pKd=${ctx.raw.y.toFixed(2)}` } } },
+      scales: {
+        x: { title: { display: true, text: 'koff proxy (higher = slower off-rate)' } },
+        y: { title: { display: true, text: 'pKd (higher = better)' } },
+      },
+    },
+  });
+}
 </script>
 </body>
 </html>

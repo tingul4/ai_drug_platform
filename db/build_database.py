@@ -186,6 +186,8 @@ def create_schema(conn):
         mutations       TEXT,    -- JSON list of mutation strings
         ddG_binding     REAL,
         ddG_stability   REAL,
+        pKd_shift       REAL,    -- ΔpKd derived from ΔΔG: −ΔΔG/(RT·ln10); ΔpIC50 ≈ ΔpKd under 1:1 competitive
+        pKd_abs         REAL,    -- PDBbind-anchored absolute pKd (if WT Kd known)
         koff_relative   REAL,
         residence_time  REAL,
         immunogenicity  REAL,

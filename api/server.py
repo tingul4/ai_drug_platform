@@ -10,7 +10,7 @@ Endpoints:
   GET  /api/pdb/<pdb_id>       - get PDB structure info
 """
 
-import sys, json, sqlite3, traceback
+import sys, json, sqlite3, traceback, threading
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,6 +19,7 @@ from flask_cors import CORS
 
 from engine.analyzer import ProteinOptimizer
 from engine import smallmol
+from engine import uniprot
 
 DB_PATH      = Path(__file__).parent.parent / "db" / "skempi.db"
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -26,15 +27,21 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 app = Flask(__name__, static_folder=str(FRONTEND_DIR))
 CORS(app)
 
-# Single shared optimizer instance (loads SKEMPI stats once)
+# Single shared optimizer instance, initialized eagerly at module import so the
+# first HTTP request doesn't pay the ~1 s cold-start cost. A lock guards any
+# lazy re-init path to prevent concurrent workers from duplicating the load.
 _optimizer = None
+_optimizer_lock = threading.Lock()
 
 def get_optimizer():
     global _optimizer
-    if _optimizer is None:
-        print("[API] Initialising ProteinOptimizer...")
-        _optimizer = ProteinOptimizer()
-        print("[API] Ready.")
+    if _optimizer is not None:
+        return _optimizer
+    with _optimizer_lock:
+        if _optimizer is None:
+            print("[API] Initialising ProteinOptimizer...")
+            _optimizer = ProteinOptimizer()
+            print("[API] Ready.")
     return _optimizer
 
 
@@ -44,11 +51,9 @@ def api_stats():
     try:
         opt = get_optimizer()
         stats = opt.get_db_stats()
-        stats["iedb_pssm_loaded"]     = opt.iedb.loaded
-        if opt.iedb.loaded:
-            stats["iedb_binders"]     = opt.iedb.n_binder
-            stats["iedb_nonbinders"]  = opt.iedb.n_nonbinder
-            stats["iedb_source"]      = opt.iedb.source
+        stats["iedb_binders"]     = opt.iedb.n_binder
+        stats["iedb_nonbinders"]  = opt.iedb.n_nonbinder
+        stats["iedb_source"]      = opt.iedb.source
         return jsonify({"ok": True, "stats": stats})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -56,29 +61,23 @@ def api_stats():
 
 @app.route("/api/immuno/score", methods=["POST"])
 def api_immuno_score():
-    """Compare heuristic vs IEDB-PSSM scores for a single sequence."""
+    """IEDB-PSSM MHC-II T-cell epitope risk for a single sequence."""
     try:
         data = request.get_json(force=True)
         seq = (data or {}).get("sequence", "").strip().upper()
         seq = "".join(a for a in seq if a.isalpha())
         if len(seq) < 9:
             return jsonify({"ok": False, "error": "Sequence must be ≥9 residues"}), 400
-        from engine.analyzer import calc_immunogenicity
         opt = get_optimizer()
-        out = {
-            "sequence_len":   len(seq),
-            "heuristic_risk": calc_immunogenicity(seq),
-            "pssm_loaded":    opt.iedb.loaded,
-        }
-        if opt.iedb.loaded:
-            r = opt.iedb.score_sequence(seq)
-            if r:
-                out["pssm_risk"]        = r["risk"]
-                out["pssm_top_hits"]    = r["top_hits"]
-                out["pssm_n_hot"]       = r["n_hot_windows"]
-                out["pssm_n_windows"]   = r["n_windows"]
-                out["pssm_max_score"]   = r["max_score"]
-                out["pssm_source"]      = opt.iedb.source
+        out = {"sequence_len": len(seq)}
+        r = opt.iedb.score_sequence(seq)
+        if r:
+            out["pssm_risk"]        = r["risk"]
+            out["pssm_top_hits"]    = r["top_hits"]
+            out["pssm_n_hot"]       = r["n_hot_windows"]
+            out["pssm_n_windows"]   = r["n_windows"]
+            out["pssm_max_score"]   = r["max_score"]
+            out["pssm_source"]      = opt.iedb.source
         return jsonify({"ok": True, "result": _clean(out)})
     except Exception as e:
         traceback.print_exc()
@@ -114,17 +113,13 @@ def api_analyze():
         target      = data.get("target", "Unknown Target")[:80]
         strategy    = data.get("strategy", "mixed")
         max_variants = min(int(data.get("max_variants", 80)), 200)
-        immuno_mode = data.get("immuno_mode", "pssm")
 
         if strategy not in ("conservative", "aggressive", "mixed"):
             strategy = "mixed"
-        if immuno_mode not in ("heuristic", "pssm", "hybrid"):
-            immuno_mode = "pssm"
 
         opt    = get_optimizer()
         result = opt.run_optimization(sequence, name=name, target=target,
-                                      max_variants=max_variants, strategy=strategy,
-                                      immuno_mode=immuno_mode)
+                                      max_variants=max_variants, strategy=strategy)
 
         if "error" in result:
             return jsonify({"ok": False, "error": result["error"]}), 400
@@ -264,6 +259,30 @@ def api_skempi_dist():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── UniProt lookup ────────────────────────────────────────────────────────────
+@app.route("/api/uniprot/<acc>")
+def api_uniprot(acc):
+    """Fetch a UniProt entry (sequence + features + PDB/AF xrefs).
+
+    Cached on disk under db/uniprot_cache/. Appends ``?refresh=1`` to bypass.
+    """
+    try:
+        use_cache = request.args.get("refresh", "0") != "1"
+        entry = uniprot.fetch_by_id(acc, use_cache=use_cache)
+        return jsonify({"ok": True, "entry": _clean(entry)})
+    except uniprot.UniProtError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/uniprot/demo")
+def api_uniprot_demo():
+    """Return the curated demo-target list shown in the frontend dropdown."""
+    return jsonify({"ok": True, "targets": uniprot.DEMO_TARGETS})
+
+
 # ── small-molecule (KRAS G12D POC) ────────────────────────────────────────────
 @app.route("/api/smallmol/poc")
 def api_smallmol_poc():
@@ -314,5 +333,7 @@ def _clean(obj):
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 7860))
+    # Pre-warm models before binding the socket so the first HTTP request is fast
+    get_optimizer()
     print(f"[API] Starting server on port {port}...")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

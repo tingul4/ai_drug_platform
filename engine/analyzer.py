@@ -130,38 +130,6 @@ def calc_solubility(sequence):
     score = 0.3 + (charged / n) * 0.4 + (polar / n) * 0.2 - (hydro / n) * 0.3
     return round(min(max(score, 0.0), 1.0), 3)
 
-def calc_immunogenicity(sequence, mutations=None):
-    """
-    NetMHCpan-inspired immunogenicity risk (0-1).
-    Based on MHC-II binding hotspot amino acid composition.
-    Legacy heuristic — retained for comparison with the PSSM model.
-    """
-    # MHC-II anchor positions prefer hydrophobic/aromatic residues
-    high_risk = set('WFYLIMV')
-    medium_risk = set('ATHQNKR')
-    n = len(sequence)
-    if n == 0: return 0.1
-
-    risk = 0.1  # baseline
-    for i in range(n - 9):
-        nonapeptide = sequence[i:i+9]
-        anchor_score = sum(1 for aa in [nonapeptide[1], nonapeptide[4], nonapeptide[6]]
-                           if aa in high_risk)
-        risk += anchor_score * 0.01
-
-    # Penalize mutations that introduce novel epitopes
-    if mutations:
-        for mut in mutations:
-            if len(mut) >= 3:
-                new_aa = mut[-1]
-                if new_aa in high_risk:
-                    risk += 0.05
-                elif new_aa in medium_risk:
-                    risk += 0.02
-
-    return round(min(risk, 1.0), 3)
-
-
 # ─── IEDB-calibrated MHC-II PSSM immunogenicity model ────────────────────────
 class IEDBImmunoModel:
     """
@@ -173,9 +141,11 @@ class IEDBImmunoModel:
     binder p05 and p95.
     """
     def __init__(self, pssm_path=IEDB_PSSM_PATH):
-        self.loaded = False
         if not pssm_path.exists():
-            return
+            raise FileNotFoundError(
+                f"IEDB PSSM asset missing at {pssm_path}. "
+                "Run the dataset build step to generate it."
+            )
         data = json.loads(pssm_path.read_text())
         self.window = data["window"]
         self.aa_idx = {a: i for i, a in enumerate(data["amino_acids"])}
@@ -184,7 +154,6 @@ class IEDBImmunoModel:
         self.source = data.get("source", "IEDB 2010")
         self.n_binder = data.get("n_binder_peptides")
         self.n_nonbinder = data.get("n_nonbinder_peptides")
-        self.loaded = True
 
     def score_window(self, window):
         s = 0.0
@@ -197,7 +166,7 @@ class IEDBImmunoModel:
 
     def score_sequence(self, sequence):
         """Return (risk_0_1, n_hot_windows, max_window_score, hot_peptides)."""
-        if not self.loaded or len(sequence) < self.window:
+        if len(sequence) < self.window:
             return None
         w = self.window
         scores = []
@@ -230,14 +199,6 @@ class IEDBImmunoModel:
             "top_hits":       sorted(hot, key=lambda x: -x[2])[:5],
         }
 
-
-def calc_immunogenicity_pssm(sequence, model: "IEDBImmunoModel"):
-    """Return a 0-1 risk score using the IEDB PSSM. Falls back to heuristic
-    if the PSSM asset is missing."""
-    if model is None or not getattr(model, "loaded", False):
-        return calc_immunogenicity(sequence)
-    r = model.score_sequence(sequence)
-    return r["risk"] if r else calc_immunogenicity(sequence)
 
 # ─── SKEMPI-calibrated ddG model ─────────────────────────────────────────────
 class SKEMPIModel:
@@ -357,37 +318,62 @@ class SKEMPIModel:
 # ─── main analyzer class ──────────────────────────────────────────────────────
 class ProteinOptimizer:
 
-    def __init__(self, immuno_mode='pssm'):
-        """
-        immuno_mode:
-          'heuristic' – original MHC-II anchor hotspot rule
-          'pssm'      – IEDB 2010 9-mer PSSM (default)
-          'hybrid'    – 0.5 * heuristic + 0.5 * pssm
-        """
+    def __init__(self):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.model = SKEMPIModel(self.conn)
         self.iedb = IEDBImmunoModel()
-        if not self.iedb.loaded and immuno_mode != 'heuristic':
-            print("[ProteinOptimizer] IEDB PSSM asset missing — "
-                  "falling back to heuristic immunogenicity.")
-            immuno_mode = 'heuristic'
-        self.immuno_mode = immuno_mode
-        print(f"[ProteinOptimizer] immunogenicity mode = {self.immuno_mode}"
-              + (f" (IEDB PSSM: {self.iedb.n_binder} binders / "
-                 f"{self.iedb.n_nonbinder} non-binders)" if self.iedb.loaded else ""))
+        self._load_pdbbind()
+        print(f"[ProteinOptimizer] IEDB PSSM: {self.iedb.n_binder} binders / "
+              f"{self.iedb.n_nonbinder} non-binders")
+
+    def _load_pdbbind(self):
+        """Load PDB → experimental pKd lookup from the pdbbind_affinity table.
+
+        Prefer PP (protein-protein) over PL (protein-ligand) for SKEMPI PDBs;
+        among equal types prefer Kd > Ki > IC50 (most direct thermodynamic).
+        """
+        self.pdbbind = {}  # pdb_id -> {pKd, kind, complex_type, relation, notes}
+        try:
+            rows = self.conn.execute("""
+                SELECT pdb_id, complex_type, kind, relation, pKd, notes
+                FROM pdbbind_affinity
+            """).fetchall()
+        except sqlite3.OperationalError:
+            print("[ProteinOptimizer] pdbbind_affinity table missing — "
+                  "run `python db/build_pdbbind.py` to enable absolute pKd.")
+            return
+        pref_type = {"PP": 0, "PL": 1}
+        pref_kind = {"Kd": 0, "Ki": 1, "IC50": 2}
+        for r in rows:
+            pdb = r["pdb_id"].upper()
+            key = (pref_type.get(r["complex_type"], 9),
+                   pref_kind.get(r["kind"], 9))
+            cur = self.pdbbind.get(pdb)
+            if cur is None or key < cur["_key"]:
+                self.pdbbind[pdb] = {
+                    "pKd":          r["pKd"],
+                    "kind":         r["kind"],
+                    "complex_type": r["complex_type"],
+                    "relation":     r["relation"],
+                    "notes":        r["notes"],
+                    "_key":         key,
+                }
+        print(f"[ProteinOptimizer] PDBbind loaded: {len(self.pdbbind)} PDBs with WT pKd")
+
+    def wt_affinity(self, pdb_id):
+        """Return WT experimental affinity dict for a PDB, or None."""
+        if not pdb_id:
+            return None
+        r = self.pdbbind.get(pdb_id.upper())
+        if not r:
+            return None
+        return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def score_immunogenicity(self, sequence, mutations=None):
-        """Unified entry — dispatches by self.immuno_mode."""
-        if self.immuno_mode == 'heuristic' or not self.iedb.loaded:
-            return calc_immunogenicity(sequence, mutations)
-        pssm_risk = calc_immunogenicity_pssm(sequence, self.iedb)
-        if self.immuno_mode == 'pssm':
-            return pssm_risk
-        # hybrid
-        heur = calc_immunogenicity(sequence, mutations)
-        return round(0.5 * pssm_risk + 0.5 * heur, 3)
+        r = self.iedb.score_sequence(sequence)
+        return r["risk"] if r else 0.0
 
     # ── 1. find closest PDB structure ─────────────────────────────────────
     def find_closest_pdb(self, query_seq, top_k=5):
@@ -423,7 +409,27 @@ class ProteinOptimizer:
                     })
 
         results.sort(key=lambda x: x['score'], reverse=True)
+
+        # PDBbind tie-breaker: if top-1 has no pKd anchor but a close-enough
+        # match does, promote the anchored one. Unlocks absolute pKd for common
+        # queries (e.g. full-length hGH prefers 1BP3 0.87 > 1A22 0.79 but only
+        # 1A22 has a PDBbind Kd).
+        if results and self.pdbbind:
+            top_score = results[0]['score']
+            top_has_anchor = results[0]['pdb_id'].upper() in self.pdbbind
+            if not top_has_anchor:
+                for i in range(1, min(top_k, len(results))):
+                    if top_score - results[i]['score'] > self.PDBBIND_TIEBREAK_TOL:
+                        break
+                    if results[i]['pdb_id'].upper() in self.pdbbind:
+                        results.insert(0, results.pop(i))
+                        break
+
         return results[:top_k]
+
+    # Max similarity gap allowed when promoting a PDBbind-anchored match over
+    # a higher-similarity non-anchored one (see find_closest_pdb).
+    PDBBIND_TIEBREAK_TOL = 0.15
 
     # ── 2. alanine scanning ───────────────────────────────────────────────
     def alanine_scan(self, sequence, pdb_id=None, chain=None):
@@ -553,6 +559,32 @@ class ProteinOptimizer:
 
         return variants
 
+    # Physical-value sanity bounds (see DEMO_AIM3.md §4.3)
+    DDG_BIND_CAP   = 10.0   # kcal/mol; multi-mutation accumulation beyond this is extrapolation
+    PKD_ABS_CAP    = 14.0   # fM-level ceiling for PPI affinity
+    MW_MIN_KDA     = 0.5
+    MW_MAX_KDA     = 200.0
+    PI_PHYS        = 7.4
+    PI_MIN_DIST    = 1.0    # warn if |pI − 7.4| < 1
+    AGG_MAX_OK     = 0.4
+    SOL_MIN_OK     = 0.4
+
+    def _physical_warnings(self, pI, mw, aggregation, solubility, ddG_extrapolated=False,
+                           pkd_capped=False):
+        """Collect warning tags for out-of-range physical values. See DEMO_AIM3.md §4.3."""
+        w = []
+        if ddG_extrapolated:          w.append('ddG_extrapolated')
+        if pkd_capped:                w.append('pkd_capped')
+        if abs(pI - self.PI_PHYS) < self.PI_MIN_DIST:
+            w.append('pI_near_physiological')
+        if aggregation > self.AGG_MAX_OK:
+            w.append('aggregation_high')
+        if solubility < self.SOL_MIN_OK:
+            w.append('solubility_low')
+        if mw < self.MW_MIN_KDA or mw > self.MW_MAX_KDA:
+            w.append('mw_out_of_range')
+        return w
+
     # ── 4. score variants ─────────────────────────────────────────────────
     def score_variants(self, variants, scan_results, pdb_id=None, chain=None):
         """Score each variant on all three tool objectives."""
@@ -573,19 +605,25 @@ class ProteinOptimizer:
             muts = v['mutations']
 
             if v['is_wt']:
+                wt_agg = calc_aggregation(seq)
+                wt_sol = calc_solubility(seq)
+                wt_pI  = calc_pI(seq)
+                wt_mw  = calc_mw(seq)
                 scored.append({**v,
                     'ddG_binding':     0.0,
                     'ddG_stability':   0.0,
+                    'pKd_shift':       0.0,
                     'koff_relative':   1.0,
                     'residence_time':  10.0,
                     'immunogenicity':  self.score_immunogenicity(seq),
-                    'aggregation':     calc_aggregation(seq),
-                    'solubility':      calc_solubility(seq),
-                    'pI':              calc_pI(seq),
-                    'mw_kDa':          calc_mw(seq),
+                    'aggregation':     wt_agg,
+                    'solubility':      wt_sol,
+                    'pI':              wt_pI,
+                    'mw_kDa':          wt_mw,
                     'hbonds':          self._estimate_hbonds(seq),
                     'skempi_support':  0,
                     'pareto_rank':     0,
+                    'warnings':        self._physical_warnings(wt_pI, wt_mw, wt_agg, wt_sol),
                 })
                 continue
 
@@ -617,19 +655,40 @@ class ProteinOptimizer:
             total_koff = min(max(total_koff, 0.001), 1000.0)
             residence = round(10.0 / total_koff, 3)
 
+            # ΔΔG accumulated over multiple point mutations can drift into
+            # physically implausible territory; clamp and flag as extrapolation.
+            ddg_extrapolated = abs(total_ddG_bind) > self.DDG_BIND_CAP
+            if ddg_extrapolated:
+                total_ddG_bind = max(-self.DDG_BIND_CAP,
+                                     min(self.DDG_BIND_CAP, total_ddG_bind))
+
+            # Affinity-shift derivation from ΔΔG (T = 298 K):
+            #   Kd_mut = Kd_WT · exp(ΔΔG / RT)    RT = 0.592 kcal/mol
+            #   ΔpKd   = −ΔΔG / (RT · ln10) ≈ −ΔΔG / 1.363
+            # Positive ΔpKd = stronger binding. ΔpIC50 ≈ ΔpKd under 1:1 competitive.
+            pKd_shift = round(-total_ddG_bind / 1.363, 3)
+
+            agg = calc_aggregation(seq)
+            sol = calc_solubility(seq)
+            pI  = calc_pI(seq)
+            mw  = calc_mw(seq)
+
             scored.append({**v,
                 'ddG_binding':    round(total_ddG_bind, 3),
                 'ddG_stability':  round(total_ddG_stab, 3),
+                'pKd_shift':      pKd_shift,
                 'koff_relative':  round(total_koff, 4),
                 'residence_time': residence,
                 'immunogenicity': self.score_immunogenicity(seq, muts),
-                'aggregation':    calc_aggregation(seq),
-                'solubility':     calc_solubility(seq),
-                'pI':             calc_pI(seq),
-                'mw_kDa':         calc_mw(seq),
+                'aggregation':    agg,
+                'solubility':     sol,
+                'pI':             pI,
+                'mw_kDa':         mw,
                 'hbonds':         self._estimate_hbonds(seq),
                 'skempi_support': total_support,
                 'pareto_rank':    0,
+                'warnings':       self._physical_warnings(pI, mw, agg, sol,
+                                                          ddG_extrapolated=ddg_extrapolated),
             })
 
         return scored
@@ -642,17 +701,24 @@ class ProteinOptimizer:
     # ── 5. Pareto optimization ────────────────────────────────────────────
     def pareto_optimize(self, scored_variants):
         """
-        Non-dominated sorting on 3 objectives (all minimized):
-          F1 = ddG_binding          (lower = stronger binding)
-          F2 = immunogenicity        (lower = safer)
-          F3 = aggregation           (lower = more drugable)
+        Non-dominated sorting on 5 objectives (all minimized):
+          F1 = ddG_binding      (lower = stronger binding)
+          F2 = immunogenicity    (lower = safer)
+          F3 = aggregation       (lower = more drugable)
+          F4 = ddG_stability     (lower = more stable monomer)
+          F5 = koff_relative     (lower = slower dissociation / longer residence)
+
+        pKd_shift is intentionally excluded: it is a linear transform of
+        ddG_binding (pKd_shift = -ddG/1.363), so including it would double-count
+        the affinity axis and dilute the other objectives.
         """
         non_wt = [v for v in scored_variants if not v.get('is_wt')]
         if not non_wt:
             return scored_variants
 
         F = np.array([
-            [v['ddG_binding'], v['immunogenicity'], v['aggregation']]
+            [v['ddG_binding'], v['immunogenicity'], v['aggregation'],
+             v['ddG_stability'], v['koff_relative']]
             for v in non_wt
         ])
 
@@ -730,23 +796,21 @@ class ProteinOptimizer:
 
     # ── 7. full pipeline ──────────────────────────────────────────────────
     def run_optimization(self, sequence, name="Query", target="Unknown",
-                         max_variants=80, strategy='mixed', immuno_mode=None):
+                         max_variants=80, strategy='mixed'):
         """
         Run the full 3-tool parallel optimization pipeline.
         Returns a result dict suitable for API serialization.
         """
         t0 = time.time()
         session_id = str(uuid.uuid4())[:8]
-        if immuno_mode and immuno_mode in ('heuristic', 'pssm', 'hybrid'):
-            if immuno_mode != 'heuristic' and not self.iedb.loaded:
-                immuno_mode = 'heuristic'
-            self.immuno_mode = immuno_mode
 
         # Clean + validate sequence
         sequence = sequence.upper().replace(' ','').replace('\n','')
         sequence = ''.join(aa for aa in sequence if aa in AA_PROPS)
         if len(sequence) < 6:
             return {'error': 'Sequence too short (min 6 AAs)', 'session_id': session_id}
+        if len(sequence) > 2000:
+            return {'error': 'Sequence too long (max 2000 AAs)', 'session_id': session_id}
 
         seq_hash = hashlib.md5(sequence.encode()).hexdigest()[:8]
 
@@ -765,6 +829,20 @@ class ProteinOptimizer:
         scored   = self.score_variants(variants, scan, pdb_id=pdb_id, chain=pdb_chain)
         scored   = self.pareto_optimize(scored)
 
+        # --- PDBbind anchor: lift ΔpKd to absolute pKd when WT Kd available ---
+        wt_aff = self.wt_affinity(pdb_id)
+        if wt_aff is not None:
+            pKd_wt = wt_aff["pKd"]
+            for v in scored:
+                pkd_raw = pKd_wt + v.get("pKd_shift", 0.0)
+                if pkd_raw > self.PKD_ABS_CAP:
+                    pkd_raw = self.PKD_ABS_CAP
+                    v.setdefault('warnings', []).append('pkd_capped')
+                v["pKd_abs"] = round(pkd_raw, 3)
+        else:
+            for v in scored:
+                v["pKd_abs"] = None
+
         # Sort: Pareto rank first, then ddG binding
         non_wt_sorted = sorted(
             [v for v in scored if not v.get('is_wt')],
@@ -772,24 +850,20 @@ class ProteinOptimizer:
         )
         wt_entry = next((v for v in scored if v.get('is_wt')), None)
 
-        # Build an immunogenicity comparison panel for the WT sequence
-        # (lets users compare heuristic vs IEDB-PSSM side-by-side).
+        # IEDB-PSSM immunogenicity detail for the WT sequence.
         immuno_detail = {
-            'mode':             self.immuno_mode,
-            'heuristic_risk':   calc_immunogenicity(sequence),
-            'pssm_risk':        None,
-            'pssm_top_hits':    [],
-            'pssm_n_hot':       0,
-            'pssm_n_windows':   0,
-            'pssm_source':      self.iedb.source if self.iedb.loaded else None,
+            'pssm_risk':      None,
+            'pssm_top_hits':  [],
+            'pssm_n_hot':     0,
+            'pssm_n_windows': 0,
+            'pssm_source':    self.iedb.source,
         }
-        if self.iedb.loaded:
-            r = self.iedb.score_sequence(sequence)
-            if r:
-                immuno_detail['pssm_risk']      = r['risk']
-                immuno_detail['pssm_top_hits']  = r['top_hits']
-                immuno_detail['pssm_n_hot']     = r['n_hot_windows']
-                immuno_detail['pssm_n_windows'] = r['n_windows']
+        r = self.iedb.score_sequence(sequence)
+        if r:
+            immuno_detail['pssm_risk']      = r['risk']
+            immuno_detail['pssm_top_hits']  = r['top_hits']
+            immuno_detail['pssm_n_hot']     = r['n_hot_windows']
+            immuno_detail['pssm_n_windows'] = r['n_windows']
 
         t1 = time.time()
         runtime = round(t1 - t0, 2)
@@ -812,6 +886,7 @@ class ProteinOptimizer:
             'pdb_matches':   pdb_matches[:3],
             'alanine_scan':  scan[:30],
             'n_hotspots':    sum(1 for r in scan if r['is_hotspot']),
+            'wt_affinity':   wt_aff,   # experimental PDBbind Kd/Ki/IC50 for matched PDB
 
             # Tool 2 + 3 outputs
             'wt_baseline':   wt_entry,
@@ -846,6 +921,8 @@ class ProteinOptimizer:
                 session_id, i+1, c['variant_id'],
                 json.dumps(c['mutations']),
                 c['ddG_binding'],  c['ddG_stability'],
+                c.get('pKd_shift', 0.0),
+                c.get('pKd_abs'),
                 c['koff_relative'], c['residence_time'],
                 c['immunogenicity'], c['aggregation'], c['solubility'],
                 c['pI'], c['mw_kDa'], c['hbonds'],
@@ -862,10 +939,12 @@ class ProteinOptimizer:
         self.conn.executemany("""
             INSERT INTO candidates
               (session_id, rank, variant_id, mutations,
-               ddG_binding, ddG_stability, koff_relative, residence_time,
+               ddG_binding, ddG_stability, pKd_shift,
+               pKd_abs,
+               koff_relative, residence_time,
                immunogenicity, aggregation, solubility, pI, mw_kDa, hbonds,
                pareto_rank, skempi_support, score_composite)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, rows)
         self.conn.commit()
 

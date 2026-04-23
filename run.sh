@@ -33,6 +33,20 @@ if [ ! -f "$DB" ]; then
 fi
 
 echo "[INIT] Database OK: $(du -sh "$DB" | cut -f1)"
+
+# Kill any previous server still holding the port (e.g. a failed Ctrl+C)
+if command -v lsof &>/dev/null; then
+    STALE=$(lsof -ti tcp:$PORT 2>/dev/null || true)
+elif command -v ss &>/dev/null; then
+    STALE=$(ss -tlnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {print}' | grep -oP 'pid=\K[0-9]+' | head -1)
+fi
+if [ -n "$STALE" ]; then
+    echo "[INIT] Killing stale process on port $PORT (PID $STALE)..."
+    kill -TERM "$STALE" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$STALE" 2>/dev/null || true
+fi
+
 echo "[INIT] Starting server on http://localhost:$PORT ..."
 echo "[INFO] Press Ctrl+C to stop."
 echo ""

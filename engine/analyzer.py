@@ -318,15 +318,37 @@ class SKEMPIModel:
 # ─── main analyzer class ──────────────────────────────────────────────────────
 class ProteinOptimizer:
 
+    # Immunogenicity combination weight: MHC-I dominates for short linear peptides
+    # (12-20 AA, proteasome→MHC-I pathway); MHC-II PSSM kept as a CD4-help sanity
+    # check. 0.7/0.3 chosen so MHC-II still contributes but does not flood the
+    # signal when peptides are too short to produce many MHC-II 9-mer windows.
+    IMMUNO_WEIGHT_MHC_I = 0.7
+    IMMUNO_WEIGHT_MHC_II = 0.3
+
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.model = SKEMPIModel(self.conn)
         self.iedb = IEDBImmunoModel()
+        self.mhcflurry = self._load_mhcflurry()
         self._load_pdbbind()
         print(f"[ProteinOptimizer] IEDB PSSM: {self.iedb.n_binder} binders / "
               f"{self.iedb.n_nonbinder} non-binders")
+        if self.mhcflurry:
+            print(f"[ProteinOptimizer] {self.mhcflurry.source}")
+        else:
+            print("[ProteinOptimizer] MHCflurry unavailable — MHC-I risk disabled, "
+                  "falling back to MHC-II PSSM only")
+
+    def _load_mhcflurry(self):
+        """Lazy-load MHCflurry; return None if unavailable so analysis still runs."""
+        try:
+            from engine.mhcflurry_immuno import MHCflurryImmunoModel
+            return MHCflurryImmunoModel()
+        except Exception as e:
+            print(f"[ProteinOptimizer] MHCflurry load failed: {e}")
+            return None
 
     def _load_pdbbind(self):
         """Load PDB → experimental pKd lookup from the pdbbind_affinity table.
@@ -372,8 +394,34 @@ class ProteinOptimizer:
         return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def score_immunogenicity(self, sequence, mutations=None):
-        r = self.iedb.score_sequence(sequence)
-        return r["risk"] if r else 0.0
+        """Return a single combined MHC-I/II risk scalar in [0, 1] for Pareto use."""
+        return self.score_immunogenicity_detail(sequence, mutations)["combined"]
+
+    def score_immunogenicity_detail(self, sequence, mutations=None):
+        """Full dict with per-axis risks + epitope hits. Used by analyze()."""
+        mhc_ii = self.iedb.score_sequence(sequence)
+        mhc_ii_risk = mhc_ii["risk"] if mhc_ii else 0.0
+
+        mhc_i_risk = None
+        mhc_i_detail = None
+        if self.mhcflurry is not None:
+            mhc_i_detail = self.mhcflurry.score_sequence(sequence)
+            if mhc_i_detail is not None:
+                mhc_i_risk = mhc_i_detail.risk
+
+        if mhc_i_risk is None:
+            combined = mhc_ii_risk  # MHCflurry not loaded / seq < 9 AA
+        else:
+            combined = (self.IMMUNO_WEIGHT_MHC_I * mhc_i_risk
+                        + self.IMMUNO_WEIGHT_MHC_II * mhc_ii_risk)
+
+        return {
+            "combined":    round(combined, 3),
+            "mhc_i_risk":  mhc_i_risk,
+            "mhc_ii_risk": mhc_ii_risk,
+            "mhc_i_detail":  mhc_i_detail,   # MHCIRiskResult or None
+            "mhc_ii_detail": mhc_ii,         # dict or None
+        }
 
     # ── 1. find closest PDB structure ─────────────────────────────────────
     def find_closest_pdb(self, query_seq, top_k=5):
@@ -489,6 +537,7 @@ class ProteinOptimizer:
         if not targets:
             targets = scan_results[:10]
 
+        seen_sequences = {sequence}
         variants = []
 
         # WT as baseline
@@ -502,21 +551,22 @@ class ProteinOptimizer:
         rng = np.random.RandomState(42)
         aa_list = list(AA_PROPS.keys())
 
-        for _ in range(max_variants):
+        attempts = 0
+        max_attempts = max_variants * 10
+        while len(variants) < max_variants + 1 and attempts < max_attempts:
+            attempts += 1
             n_muts = rng.choice([1, 1, 1, 2, 2, 3], p=[0.4, 0.15, 0.15, 0.15, 0.1, 0.05])
             positions = rng.choice(len(targets), size=min(n_muts, len(targets)), replace=False)
 
             mut_labels  = []
             mut_sequence = list(sequence)
-            valid = True
-
+            
             for pi in positions:
                 pos_info = targets[pi]
                 wt_aa = pos_info['wt_aa']
                 pos   = pos_info['position']
 
                 if strategy == 'conservative':
-                    # Pick substitutions with positive BLOSUM score
                     cands = sorted(
                         [aa for aa in aa_list if aa != wt_aa],
                         key=lambda aa: blosum_score(wt_aa, aa),
@@ -524,14 +574,12 @@ class ProteinOptimizer:
                     )[:6]
                     mut_aa = rng.choice(cands)
                 elif strategy == 'aggressive':
-                    # Pick substitutions that SKEMPI shows strengthen binding
                     improving = [
                         aa for aa in aa_list
                         if aa != wt_aa and self.model.sub_mean.get((wt_aa, aa), 0) < -0.3
                     ]
                     mut_aa = rng.choice(improving) if improving else rng.choice(aa_list)
                 else:  # mixed
-                    # 60% SKEMPI-guided, 40% conservative
                     if rng.random() < 0.6:
                         cands = sorted(
                             aa_list,
@@ -549,15 +597,81 @@ class ProteinOptimizer:
                 mut_sequence[pos-1] = mut_aa
                 mut_labels.append(f"{wt_aa}{pos}{mut_aa}")
 
-            if valid and mut_labels:
+            new_seq = ''.join(mut_sequence)
+            if new_seq not in seen_sequences:
+                seen_sequences.add(new_seq)
                 variants.append({
                     'variant_id': f"V{len(variants):04d}",
-                    'mutations':  mut_labels,
-                    'sequence':   ''.join(mut_sequence),
+                    'mutations':  sorted(mut_labels),
+                    'sequence':   new_seq,
                     'is_wt':      False,
                 })
 
         return variants
+
+    # ── J(x) Year-1 baseline (roadmap S8) ─────────────────────────────────
+    # J(x) = w1·f_bind + w2·f_admet + w3·f_synth − w4·Penalty, w_i = 0.25.
+    # All proxies are explicit Year-1 substitutes; S3/S4/S7 replace them.
+    JX_W_BIND    = 0.25
+    JX_W_ADMET   = 0.25
+    JX_W_SYNTH   = 0.25
+    JX_W_PENALTY = 0.25
+    # ΔΔG magnitude (kcal/mol) that maps to f_bind = 1.0. 5 kcal/mol ≈ 3 orders
+    # of magnitude Kd improvement at 298 K — a hard upper bound for a realistic
+    # seed-derived variant on one target.
+    JX_DDG_SCALE      = 5.0
+    JX_SYNTH_DEFAULT  = 0.5   # AiZynthFinder placeholder (S7)
+    JX_AGG_HARD       = 0.4   # Penalty trigger (matches AGG_MAX_OK below)
+
+    def composite_Jx(self, variant):
+        """
+        Year-1 J(x) baseline per roadmap S8 (with Δ-from-WT Penalty revision).
+
+        Year-1 proxies (explicit; replaced when the listed step lands):
+            f_bind   ← −ΔΔG/5.0 from SKEMPIModel           (S3/S4 → docking ΔG)
+            f_admet  ← 0.5·solubility + 0.5·(1−aggregation) (S7 → ADMETlab 2.0)
+            f_synth  ← 0.5 constant                         (S7 → AiZynthFinder)
+            Penalty  ← 1 if the variant introduces a MHC-I 9-mer strong binder
+                       (%rank<2) that the WT seed did NOT have, OR aggregation
+                       crosses the 0.4 hard cap. (Tox21 flag arrives in S7.)
+
+        Δ-from-WT rationale: the three seeds are PAI-1 self-peptides whose WT
+        already contains strong-presented 9-mers (central tolerance suppresses
+        the native epitopes). A literal "any MHC-I %rank<2" rule would flag
+        100% of variants including WT. Penalty therefore fires only when a
+        mutation *introduces a new* non-self MHC-I liability — matching the
+        peptide_pipeline_plan §4.2 design intent.
+        """
+        f_bind = max(0.0, min(1.0, -variant['ddG_binding'] / self.JX_DDG_SCALE))
+        f_admet_raw = 0.5 * variant['solubility'] + 0.5 * (1.0 - variant['aggregation'])
+        f_admet = max(0.0, min(1.0, f_admet_raw))
+        f_synth = self.JX_SYNTH_DEFAULT
+
+        mhc_i_new = bool(variant.get('mhc_i_introduces_new_binder', False))
+        agg_high = variant['aggregation'] > self.JX_AGG_HARD
+        penalty = 1.0 if (mhc_i_new or agg_high) else 0.0
+        reasons = []
+        if mhc_i_new:  reasons.append('mhc_i_new_binder_vs_wt')
+        if agg_high:   reasons.append('aggregation_high')
+
+        J = (self.JX_W_BIND    * f_bind
+             + self.JX_W_ADMET * f_admet
+             + self.JX_W_SYNTH * f_synth
+             - self.JX_W_PENALTY * penalty)
+        return {
+            'J':               round(J, 4),
+            'f_bind':          round(f_bind, 4),
+            'f_admet':         round(f_admet, 4),
+            'f_synth':         f_synth,
+            'penalty':         penalty,
+            'penalty_reasons': reasons,
+            'proxy_sources': {
+                'f_bind':  'SKEMPIModel ΔΔG',
+                'f_admet': 'solubility / aggregation heuristic',
+                'f_synth': 'synthesizability score',
+                'penalty': 'new MHC-I 9-mer %rank<2 vs WT OR aggregation>0.4',
+            },
+        }
 
     # Physical-value sanity bounds (see DEMO_AIM3.md §4.3)
     DDG_BIND_CAP   = 10.0   # kcal/mol; multi-mutation accumulation beyond this is extrapolation
@@ -599,6 +713,18 @@ class ProteinOptimizer:
         # Index scan results by position
         scan_idx = {r['position']: r for r in scan_results}
 
+        # Pre-compute WT's MHC-I strong-binder 9-mer set: used as the reference
+        # for Δ-from-WT Penalty so that self-peptide strong binders present in
+        # the seed itself do not penalize every variant (roadmap S8 revision).
+        wt_variant = next((x for x in variants if x.get('is_wt')), None)
+        wt_strong_peptides = frozenset()
+        if wt_variant is not None:
+            wt_immuno_ref = self.score_immunogenicity_detail(wt_variant['sequence'])
+            if wt_immuno_ref['mhc_i_detail'] is not None:
+                wt_strong_peptides = wt_immuno_ref['mhc_i_detail'].strong_peptides
+        else:
+            wt_immuno_ref = None
+
         scored = []
         for v in variants:
             seq  = v['sequence']
@@ -609,13 +735,17 @@ class ProteinOptimizer:
                 wt_sol = calc_solubility(seq)
                 wt_pI  = calc_pI(seq)
                 wt_mw  = calc_mw(seq)
+                # WT is the Δ-from-WT baseline by definition; never penalize it.
+                wt_immuno = wt_immuno_ref if wt_immuno_ref is not None else self.score_immunogenicity_detail(seq)
                 scored.append({**v,
                     'ddG_binding':     0.0,
                     'ddG_stability':   0.0,
                     'pKd_shift':       0.0,
                     'koff_relative':   1.0,
                     'residence_time':  10.0,
-                    'immunogenicity':  self.score_immunogenicity(seq),
+                    'immunogenicity':  wt_immuno['combined'],
+                    'mhc_i_introduces_new_binder': False,
+                    'mhc_i_new_peptides':          [],
                     'aggregation':     wt_agg,
                     'solubility':      wt_sol,
                     'pI':              wt_pI,
@@ -673,13 +803,22 @@ class ProteinOptimizer:
             pI  = calc_pI(seq)
             mw  = calc_mw(seq)
 
+            immuno_full = self.score_immunogenicity_detail(seq, muts)
+            mhc_i_new_peptides = []
+            if immuno_full['mhc_i_detail'] is not None:
+                variant_strong = immuno_full['mhc_i_detail'].strong_peptides
+                mhc_i_new_peptides = sorted(variant_strong - wt_strong_peptides)
+            mhc_i_introduces_new_binder = bool(mhc_i_new_peptides)
+
             scored.append({**v,
                 'ddG_binding':    round(total_ddG_bind, 3),
                 'ddG_stability':  round(total_ddG_stab, 3),
                 'pKd_shift':      pKd_shift,
                 'koff_relative':  round(total_koff, 4),
                 'residence_time': residence,
-                'immunogenicity': self.score_immunogenicity(seq, muts),
+                'immunogenicity': immuno_full['combined'],
+                'mhc_i_introduces_new_binder': mhc_i_introduces_new_binder,
+                'mhc_i_new_peptides':          mhc_i_new_peptides,
                 'aggregation':    agg,
                 'solubility':     sol,
                 'pI':             pI,
@@ -850,20 +989,41 @@ class ProteinOptimizer:
         )
         wt_entry = next((v for v in scored if v.get('is_wt')), None)
 
-        # IEDB-PSSM immunogenicity detail for the WT sequence.
+        # Combined MHC-I + MHC-II immunogenicity detail for the WT sequence.
+        # MHC-I (MHCflurry) is primary; MHC-II (IEDB PSSM) is secondary — see
+        # document/agent/peptide_pipeline_plan.md §4.
+        immuno_full = self.score_immunogenicity_detail(sequence)
         immuno_detail = {
+            # Primary: MHC-I via MHCflurry
+            'mhc_i_risk':     immuno_full['mhc_i_risk'],
+            'mhc_i_top_hits': (immuno_full['mhc_i_detail'].top_hits
+                               if immuno_full['mhc_i_detail'] else []),
+            'mhc_i_min_pct':  (immuno_full['mhc_i_detail'].min_percentile
+                               if immuno_full['mhc_i_detail'] else None),
+            'mhc_i_n_windows': (immuno_full['mhc_i_detail'].n_windows
+                                if immuno_full['mhc_i_detail'] else 0),
+            'mhc_i_source':   (self.mhcflurry.source if self.mhcflurry else None),
+
+            # Secondary: MHC-II via IEDB PSSM (kept under pssm_* names for UI compat)
             'pssm_risk':      None,
             'pssm_top_hits':  [],
             'pssm_n_hot':     0,
             'pssm_n_windows': 0,
             'pssm_source':    self.iedb.source,
+
+            # Combined (this is what feeds Pareto / composite)
+            'combined_risk':  immuno_full['combined'],
+            'weights':        {
+                'mhc_i':  self.IMMUNO_WEIGHT_MHC_I,
+                'mhc_ii': self.IMMUNO_WEIGHT_MHC_II,
+            },
         }
-        r = self.iedb.score_sequence(sequence)
-        if r:
-            immuno_detail['pssm_risk']      = r['risk']
-            immuno_detail['pssm_top_hits']  = r['top_hits']
-            immuno_detail['pssm_n_hot']     = r['n_hot_windows']
-            immuno_detail['pssm_n_windows'] = r['n_windows']
+        mhc_ii = immuno_full['mhc_ii_detail']
+        if mhc_ii:
+            immuno_detail['pssm_risk']      = mhc_ii['risk']
+            immuno_detail['pssm_top_hits']  = mhc_ii['top_hits']
+            immuno_detail['pssm_n_hot']     = mhc_ii['n_hot_windows']
+            immuno_detail['pssm_n_windows'] = mhc_ii['n_windows']
 
         t1 = time.time()
         runtime = round(t1 - t0, 2)

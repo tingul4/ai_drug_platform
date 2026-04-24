@@ -23,6 +23,8 @@ from engine import uniprot
 
 DB_PATH      = Path(__file__).parent.parent / "db" / "skempi.db"
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+PAI1_DIR     = Path(__file__).parent.parent / "dataset" / "peptide_pai1"
+PAI1_POOLS   = {"69-80", "76-88", "69-88", "merged"}
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIR))
 CORS(app)
@@ -301,6 +303,75 @@ def api_smallmol_plot():
     if not p.exists():
         return jsonify({"ok": False, "error": "plot not found"}), 404
     return send_from_directory(str(p.parent), p.name)
+
+
+# ── PAI-1 peptide demo (Year-1 baseline: 3 seeds + candidate pools) ──────────
+def _pai1_read_json(rel_path: str):
+    p = PAI1_DIR / rel_path
+    if not p.exists():
+        return None
+    with p.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@app.route("/api/peptide_pai1/seeds")
+def api_pai1_seeds():
+    """List the three PAI-1 mimicking seed peptides from Peptide info.zip."""
+    data = _pai1_read_json("peptides.json")
+    if data is None:
+        return jsonify({"ok": False, "error": "peptides.json not found"}), 404
+    return jsonify({"ok": True, "data": data})
+
+
+@app.route("/api/peptide_pai1/summary")
+def api_pai1_summary():
+    """Aggregate pool statistics (runtime, J distribution, penalty counts)."""
+    data = _pai1_read_json("candidates/summary.json")
+    if data is None:
+        return jsonify({"ok": False, "error": "summary.json not found"}), 404
+    return jsonify({"ok": True, "data": data})
+
+
+@app.route("/api/peptide_pai1/candidates/<pool>")
+def api_pai1_candidates(pool):
+    """Return the variant pool (full JSON) for one of: 69-80, 76-88, 69-88, merged."""
+    if pool not in PAI1_POOLS:
+        return jsonify({"ok": False, "error": f"Unknown pool '{pool}'. "
+                        f"Valid: {sorted(PAI1_POOLS)}"}), 400
+    data = _pai1_read_json(f"candidates/{pool}/variants.json")
+    if data is None:
+        return jsonify({"ok": False, "error": f"{pool}/variants.json not found"}), 404
+
+    # Allow the client to cap how many variants come across the wire.
+    try:
+        limit = int(request.args.get("limit", 0))
+    except ValueError:
+        limit = 0
+    if limit > 0 and isinstance(data.get("variants"), list):
+        data = dict(data)
+        data["variants"] = data["variants"][:limit]
+        data["_truncated_to"] = limit
+    return jsonify({"ok": True, "data": _clean(data)})
+
+
+@app.route("/api/peptide_pai1/benchmark")
+def api_pai1_benchmark():
+    """Alanine-scan consistency benchmark vs Stefansson 2004."""
+    data = _pai1_read_json("benchmark/ala_consistency.json")
+    if data is None:
+        return jsonify({"ok": False, "error": "benchmark not found"}), 404
+    return jsonify({"ok": True, "data": data})
+
+
+@app.route("/api/peptide_pai1/modifiable_sites/<name>")
+def api_pai1_sites(name):
+    """Per-residue modifiable-site list (allowed mutations + SKEMPI evidence)."""
+    if name not in {"69-80", "76-88", "69-88"}:
+        return jsonify({"ok": False, "error": f"Unknown seed '{name}'"}), 400
+    data = _pai1_read_json(f"modifiable_sites/{name}.json")
+    if data is None:
+        return jsonify({"ok": False, "error": f"sites for {name} not found"}), 404
+    return jsonify({"ok": True, "data": _clean(data)})
 
 
 # ── serve frontend ────────────────────────────────────────────────────────────

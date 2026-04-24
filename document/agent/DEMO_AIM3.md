@@ -1,5 +1,27 @@
 # AIM3 蛋白質藥物優化平台 — Demo 使用說明與階段性產出報告
 
+> **⚠️ 狀態：部分過時（Partially Superseded）**
+>
+> 本文件記錄 2026-04-22 以前的 demo 流程，對應**通用蛋白質優化**情境
+> （以 SKEMPI 查表 + IEDB-MHC-II PSSM 為核心，demo 用 hGH / TEM-1 / IFNα / Elastase / KRAS）。
+>
+> 在 2026-04 根據 `工程CM03-結合-unify-20260201-v35.pdf` 重新定位後，
+> 子計畫三第一年主線為 **PAI-1 胜肽 → LRP1 受體** 路線，demo 與評分指標會隨之改變：
+>
+> - **Demo 輸入**：改以三條 PAI-1 mimicking peptides（69-80 / 76-88 / 69-88）+ LRP1 CR cluster II (PDB 1J8E) 為預設。
+> - **免疫原性**：改以 MHCflurry 2.0（MHC-I，台灣 HLA panel）為主，現有 IEDB-MHC-II PSSM 降為副指標。
+> - **Pareto 維度**：改為 `f_bind, f_admet, f_synth, −Penalty`（計畫書 p.28 J(x) 定義）。
+>
+> 本文件保留的有效部分：
+> - `§1.1` 啟動方式（仍適用）
+> - `§2.0` sequence / name / target 欄位關係（仍適用）
+> - `§4` SQLite session 持久化（仍適用）
+>
+> **已過時**：`§1.2` Demo UniProt ID 清單（hGH 等）、基於 3-objective Pareto 的結果呈現。
+> 現行第一年 roadmap 請見：`document/agent/roadmap.md`。
+
+---
+
 > 對齊文件：`document/Aim3_doc_20260119.pdf`
 > 報告日期：2026-04-22
 

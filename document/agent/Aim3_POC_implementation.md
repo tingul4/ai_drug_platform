@@ -1,5 +1,19 @@
 # Aim3 POC 實作紀錄：KRAS G12D 胰臟癌候選分子篩選 Pipeline
 
+> **⚠️ 狀態：歷史紀錄（Historical / Out-of-scope for Year-1）**
+>
+> 此份文件記錄 2026-Q1 基於 `Aim3_doc_20260119.pdf` 所做的**小分子 KRAS G12D POC**。
+> 在 2026-04 拿到實際的 PAI-1 mimicking peptides（`Peptide info.zip`）後，
+> 子計畫三第一年的主線已根據 `工程CM03-結合-unify-20260201-v35.pdf`
+> 與 `peptide_pipeline_plan.md` 重新定位為 **PAI-1 胜肽 → LRP1 受體**路線。
+>
+> **本 POC 之角色：** 保留為「小分子旁路」的可行性證明與 `engine/smallmol.py` 程式碼的設計依據，
+> **不納入第一年 Year-1 MVP 交付範圍**。若未來有 KRAS 或其他小分子標靶需求再啟用。
+>
+> 現行第一年 roadmap 請見：`document/agent/roadmap.md` 與 `document/agent/peptide_pipeline_plan.md`。
+
+---
+
 > 對應文件：`document/Aim3_doc_20260119.pdf`  
 > 目標：建立一版「功能完整、不複雜」的端到端 pipeline，重現 PDF 預期輸出的 Summary Table 與 Pareto 排序。
 

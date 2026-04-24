@@ -1,5 +1,17 @@
 # AI-Physics Drug Optimization Platform 核心分析與預測模型
 
+> **📌 狀態：v1 Baseline 快照（2026-04-22）**
+>
+> 本文件是 `engine/analyzer.py` 在 v1（通用蛋白質優化）階段的功能與模型說明。
+> 2026-04 起子計畫三主線轉為 PAI-1 胜肽 → LRP1 路線後，下列元件的定位有調整：
+>
+> - `SKEMPIModel` / `predict_ddG`、`alanine_scan`、`generate_variants` / `score_variants`、NSGA-II Pareto：**仍為第一年 baseline 核心**。
+> - `IEDBImmunoModel`（MHC-II PSSM）：**降為副指標**，主免疫原性工具改為 MHCflurry 2.0（MHC-I，台灣 HLA panel）。詳見 `peptide_pipeline_plan.md §4`。
+> - `calc_immunogenicity` heuristic：**將移除**（已被 PSSM 取代，且 `peptide_pipeline_plan.md` 明確不使用啟發式）。
+> - Pareto 三目標（ΔΔG / immuno / aggregation）：**將擴充為 J(x) 四項**（f_bind, f_admet, f_synth, Penalty；計畫書 p.28）。
+
+---
+
 在這份系統中（以 `engine/analyzer.py` 為核心），主要使用了一個結合 **SKEMPI 2.0 實驗數據庫**的經驗模型（Empirical Model）以及多種基於物理化學屬性的啟發式（Heuristic）演算法，來進行蛋白質變異的分析與預測。
 
 以下是具體的模型與其預測分析內容：

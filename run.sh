@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================
-# AI-Physics 混合策略全維度藥物優化平台  |  Startup Script
+# AIM3 胜肽藥物優化平台  |  Startup Script
 # ================================================================
 # Usage:  ./run.sh          (default port 7860)
 #         ./run.sh 8080     (custom port)
@@ -10,31 +10,28 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${1:-7860}"
+PY="$SCRIPT_DIR/third_party/gmx_env/bin/python"
 
-# Check Python
-if ! command -v python3 &>/dev/null; then
-    echo "[ERROR] python3 not found. Please install Python 3.9+."
+if [ ! -x "$PY" ]; then
+    echo "[ERROR] gmx_env not found at $PY"
+    echo "        See README.md §環境建置 to bootstrap third_party/gmx_env."
     exit 1
 fi
 
-# Check / install dependencies
-echo "[INIT] Checking dependencies..."
-python3 -c "import flask, flask_cors, Bio, numpy, scipy" 2>/dev/null || {
-    echo "[INIT] Installing required packages..."
-    pip3 install flask flask-cors biopython numpy scipy --break-system-packages -q
-}
-
-# Verify database
-DB="$SCRIPT_DIR/db/skempi.db"
-if [ ! -f "$DB" ]; then
-    echo "[ERROR] Database not found: $DB"
-    echo "        Please rebuild with:  python3 db/build_database.py"
-    exit 1
+# Rebuild frontend if dist is missing or older than any source file
+DIST="$SCRIPT_DIR/frontend/dist/index.html"
+NEEDS_BUILD=0
+if [ ! -f "$DIST" ]; then
+    NEEDS_BUILD=1
+elif [ -n "$(find "$SCRIPT_DIR/frontend/src" -newer "$DIST" -print -quit 2>/dev/null)" ]; then
+    NEEDS_BUILD=1
+fi
+if [ "$NEEDS_BUILD" = "1" ]; then
+    echo "[INIT] Frontend dist is stale; running npm run build..."
+    (cd "$SCRIPT_DIR/frontend" && npm run build)
 fi
 
-echo "[INIT] Database OK: $(du -sh "$DB" | cut -f1)"
-
-# Kill any previous server still holding the port (e.g. a failed Ctrl+C)
+# Kill any previous server still holding the port
 if command -v lsof &>/dev/null; then
     STALE=$(lsof -ti tcp:$PORT 2>/dev/null || true)
 elif command -v ss &>/dev/null; then
@@ -52,4 +49,4 @@ echo "[INFO] Press Ctrl+C to stop."
 echo ""
 
 cd "$SCRIPT_DIR"
-PORT=$PORT python3 api/server.py
+PORT=$PORT "$PY" api/server.py

@@ -2,3 +2,6 @@ __pycache__/
 *.db*
 dataset/
 uniprot_cache/
+third_party/
+runs/
+.venv/

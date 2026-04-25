@@ -1,121 +1,145 @@
-# AI-Physics 混合策略全維度藥物優化平台
+# AIM3 — PAI-1 Mimicking Peptide Optimization Platform
 
-**基於 SKEMPI 2.0 真實實驗數據的蛋白質藥物序列最佳化系統**
-
----
-
-## 重建資料庫
-
-若需重建資料庫或初次設定環境，請按照以下步驟下載 SKEMPI 2.0 數據：
-
-1. **下載 SKEMPI 2.0 實驗數據表**
-   ```bash
-   mkdir -p dataset/skempi_v2
-   curl -o dataset/skempi_v2/skempi_v2.csv https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv
-   ```
-
-2. **下載 SKEMPI 2.0 PDB 結構文件**
-   ```bash
-   curl -o dataset/skempi_v2/SKEMPI2_PDBs.tgz https://life.bsc.es/pid/skempi2/database/download/SKEMPI2_PDBs.tgz
-   tar -xzf dataset/skempi_v2/SKEMPI2_PDBs.tgz -C dataset/skempi_v2/
-   # 解壓縮後目錄為 dataset/skempi_v2/PDBs，與 build_database.py 設定一致
-   ```
-
-3. **執行重建腳本**
-   確保 `dataset/skempi_v2/skempi_v2.csv` 和 `dataset/skempi_v2/PDBs/` 均已就位，然後執行：
-   ```bash
-   python db/build_database.py
-   ```
-
+胜肽藥物優化平台：以 Boltz-2 / ColabFold / Chai-1（Tool A）做 peptide-receptor 複合物 3D 預測，再以 AmberTools MM/GBSA（Tool B, igb=5）算結合能。針對 PAI-1 mimicking peptides 對 LRP1 CR cluster II 的競爭結合進行設計與校準。
 
 ---
 
-## 快速啟動
-
-### macOS / Linux
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-### Windows
-```
-雙擊 run.bat 或在 CMD 中執行：
-run.bat
-```
-
-啟動後在瀏覽器開啟 → **http://localhost:7860**
-
----
-
-## 系統需求
-
-- Python 3.9+
-- 套件：`flask`, `flask-cors`, `biopython`, `numpy`, `scipy`
-- 啟動腳本會自動安裝所需套件
-
----
-
-## 功能說明
-
-### 輸入
-- 蛋白質氨基酸序列（單字母代碼，20-500 aa）
-- 蛋白質名稱 / 靶點名稱
-- 優化策略：conservative / aggressive / mixed
-- 最大候選變體數（10-200）
-
-### 輸出
-- **Alanine Scan 熱點分析**：鑑定高影響力界面殘基
-- **多目標 Pareto 最佳化**：同時最佳化 ΔΔG、免疫原性、聚集傾向
-- **koff 動力學預測**：解離速率相對倍數
-- **可藥性評分**：pI、MW、溶解度、聚集傾向
-- **SKEMPI 實驗支持**：每個候選變體的實驗數據支持數量
-
-### 資料庫
-- **SKEMPI 2.0**：7,085 條真實蛋白質-蛋白質界面突變實驗記錄
-- **PDB 結構**：345 個蛋白質結構（序列 + 殘基映射）
-- **SQLite**：非揮發性輕量資料庫（7.2 MB），儲存分析歷史記錄
-
----
-
-## 系統架構
+## Architecture
 
 ```
 ai_drug_platform/
-├── db/
-│   ├── skempi.db          # SQLite 資料庫（7.2 MB）
-│   └── build_database.py  # 重建資料庫腳本
-├── engine/
-│   └── analyzer.py        # 核心分析引擎
-│       ├── SKEMPIModel    # SKEMPI-calibrated 統計模型
-│       └── ProteinOptimizer  # 完整最佳化流程
-├── api/
-│   └── server.py          # Flask REST API (port 7860)
-├── frontend/
-│   └── index.html         # 單頁應用前端
-├── run.sh                 # Linux/macOS 啟動腳本
-├── run.bat                # Windows 啟動腳本
-└── README.md
+├── api/server.py              # Flask + 非同步 Job Queue
+├── engine/analyzer.py         # 主 pipeline (Tool A → Tool B → ρ + Pareto)
+├── db/build_lrp1_receptor.py  # 受體準備 (PDB 1J8E → 清洗 + 最小化)
+├── dataset/
+│   ├── lrp1_cr2/              # 已準備好的 LRP1 CR7 受體
+│   └── peptide_pai1/
+│       ├── peptides.json      # 三條 demo 胜肽元數據
+│       └── precomputed/       # demo 胜肽的 cached pipeline 結果
+├── third_party/               # 所有 conda env (見下節)
+│   ├── gmx_env/               # 主 env: GROMACS + AmberTools + Flask
+│   ├── boltz_env/             # Tool A: Boltz-2
+│   ├── colabfold_env/         # Tool A: ColabFold
+│   └── chai_env/              # Tool A: Chai-1
+├── frontend/                  # Vite + React 前端
+├── runs/                      # 每次 pipeline 的工作目錄 (gitignored)
+└── requirements.txt           # gmx_env Python 套件 (其他 env 列在下節)
 ```
-
-### API 端點
-| Method | Path | 說明 |
-|--------|------|------|
-| GET | /api/stats | 資料庫統計 |
-| POST | /api/analyze | 執行最佳化分析 |
-| GET | /api/history | 歷史分析記錄 |
-| GET | /api/session/\<id\> | 取得特定分析結果 |
-| GET | /api/skempi/search | 搜尋 SKEMPI 記錄 |
-| GET | /api/pdb/\<pdb_id\> | 取得 PDB 結構資訊 |
-| GET | /api/skempi/distribution | ddG 分佈（圖表用） |
 
 ---
 
-## 技術規格
+## Environment setup
 
-- **ddG 預測**：SKEMPI-calibrated empirical model（340 substitution pair 統計）
-- **序列比對**：k-mer Jaccard similarity（k=3）+ local alignment
-- **多目標最佳化**：NSGA-II Pareto non-dominated sorting
-- **koff 預測**：`koff_rel = exp(ΔΔG/RT)`，clamped to [-6, 6]
-- **免疫原性**：MHC-II 9-mer sliding window scoring
-- **聚集傾向**：AGGRESCAN-like hydrophobicity profiling
+平台採用 **multi-conda-env** 架構：四個工具因 `numpy` / `biopython` 等版本相互衝突，無法同 env 共存；每個工具一個獨立 conda env，analyzer 透過 subprocess 呼叫各 env 的 CLI。
+
+### Prerequisites
+- conda（建議 24+，需要 `--solver=libmamba`）
+- NVIDIA GPU + driver ≥ 12.8（受體準備 + Boltz/ColabFold/Chai 推理用）
+
+### 1. 主 env (`gmx_env`) — Flask 後端 + Tool B (MM/GBSA)
+
+```bash
+conda create -p ./third_party/gmx_env -c conda-forge -c bioconda \
+    python=3.10 gromacs ambertools gmx_mmpbsa openmm pdbfixer \
+    -y --solver=libmamba
+
+./third_party/gmx_env/bin/pip install -r requirements.txt
+```
+
+驗證：
+```bash
+./third_party/gmx_env/bin/gmx --version | head -1     # GROMACS 2025.x
+./third_party/gmx_env/bin/MMPBSA.py --version          # AmberTools MMPBSA
+```
+
+### 2. Tool A envs (Boltz / ColabFold / Chai-1)
+
+```bash
+# Boltz-2
+conda create -p ./third_party/boltz_env python=3.10 -y --solver=libmamba
+./third_party/boltz_env/bin/pip install boltz cuequivariance_torch cuequivariance-ops-torch-cu12
+# 重要：Boltz 預設拉的 torch 對 CUDA 13；現場 driver 為 12.8，需手動換 wheel：
+./third_party/boltz_env/bin/pip install --force-reinstall \
+    torch --index-url https://download.pytorch.org/whl/cu128
+
+# ColabFold (server mode — 不需本地 MMseqs2 資料庫)
+conda create -p ./third_party/colabfold_env python=3.10 -y --solver=libmamba
+./third_party/colabfold_env/bin/pip install 'colabfold[alphafold]'
+
+# Chai-1
+conda create -p ./third_party/chai_env python=3.10 -y --solver=libmamba
+./third_party/chai_env/bin/pip install chai_lab
+```
+
+### 3. 模型權重路徑（可選）
+
+預設 Boltz 把權重存到 `~/.boltz`（~5 GB）。若想留在 repo 內：
+```bash
+export BOLTZ_CACHE=$(pwd)/third_party/models/boltz
+```
+
+ColabFold 用 `--use-msa-server` 跑遠端 MSA，無需本地資料庫。Chai-1 同理（`--use-msa-server`）。
+
+### 4. 受體準備（一次性）
+
+```bash
+# 下載 PDB 1J8E
+mkdir -p dataset/lrp1_cr2/raw
+curl -sL https://files.rcsb.org/download/1J8E.pdb -o dataset/lrp1_cr2/raw/1J8E.pdb
+
+# 清洗 + 最小化 (Amber14 + OBC2 implicit solvent, ~10 秒於 A100)
+./third_party/gmx_env/bin/python db/build_lrp1_receptor.py
+```
+
+成功會產出 `dataset/lrp1_cr2/receptor.pdb` + `metadata.json`，heavy-atom RMSD < 2 Å。
+
+### 5. 預跑 demo 胜肽 cache（一次性）
+
+三條 PAI-1 mimicking peptides（69-80, 76-88, 69-88）會被預跑進 `dataset/peptide_pai1/precomputed/`，之後 demo 時是 instant lookup。
+
+```bash
+export BOLTZ_CACHE=$(pwd)/third_party/models/boltz
+./third_party/gmx_env/bin/python -c "
+import sys; sys.path.insert(0, '.')
+from engine.analyzer import ProteinOptimizer
+opt = ProteinOptimizer()
+for seq in ['KGMAPALRHLYK', 'RHLYKELMGPWNK', 'KGMAPALRHLYKELMGPWNK']:
+    r = opt.run_pipeline(seq, tool_a='boltz2', tool_b='mmgbsa')
+    opt.save_cache(seq, r)
+    print(seq, r['binding_energy'])
+"
+```
+
+每條約 3.5 分鐘（Boltz ~2 min + MM/GBSA ~1.5 min on A100）。
+
+---
+
+## Run
+
+```bash
+# 啟動後端
+./third_party/gmx_env/bin/python api/server.py
+```
+
+API listens on `http://0.0.0.0:7860`. Frontend 走 Vite dev server（`cd frontend && npm run dev`）或 build 後由 Flask 服務。
+
+### Pipeline behaviour
+- 輸入是三條 demo 序列之一 → 直接從 `precomputed/` 回傳，毫秒內完成
+- 其他序列 → 即時跑 Tool A → Tool B（A100 上約 3–8 分鐘，依序列長度）
+- Tool A 預設 Boltz-2，可由 `tool_a` 參數切到 `colabfold` 或 `chai1`
+
+### API
+
+| Method | Path | 說明 |
+|--------|------|------|
+| POST | /api/jobs | 建立分析任務（body: `{sequence, tool_a?, tool_b?}`），回 `{job_id}` |
+| GET  | /api/jobs/\<job_id\> | Polling 任務狀態與結果 |
+| GET  | /api/uniprot/demo | UniProt demo targets |
+
+---
+
+## Notes
+
+- **Tool B 為 single-point MM/GBSA**：sander GB minimization (igb=5, 2000 steps) 後 MMPBSA.py 取一格平均。Year-1 baseline，Year-2 會改全 MD ensemble。
+- **Stefansson 校準**：`engine/analyzer.calculate_rho` 拿候選變體的 ΔΔG 對 Stefansson 1998 的 K69A/K80A/K88A Kd_fold 做 Spearman ρ。
+- **受體選擇**：CR7（PDB 1J8E）為最佳解析度的 LRP1 CR 單一 domain。Year-2 升級到 CR3-CR10 tandem 或 AF2 模型。

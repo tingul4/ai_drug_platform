@@ -1,14 +1,30 @@
-rdkit>=2024.3.1
-admet-ai>=1.3.0
-pymoo>=0.6.1
-vina>=1.2.5
-meeko>=0.5.0
-gemmi>=0.6
+# AIM3 peptide optimization platform — Python deps for the *main* conda env
+# (third_party/gmx_env). See README.md "Environment setup" for the conda
+# packages (GROMACS / AmberTools / gmx_MMPBSA) and per-tool envs (boltz_env,
+# colabfold_env, chai_env). Tool A envs cannot be merged into this one — their
+# numpy / biopython pins are mutually incompatible.
+
+# Web layer
+flask>=3.0
+flask-cors>=4.0
+
+# Scientific / structural
 numpy>=1.26,<2.0
 pandas>=2.0
 scipy>=1.11
 matplotlib>=3.8
 biopython>=1.83
 requests>=2.31
-flask>=3.0
-flask-cors>=4.0
+gemmi>=0.6
+
+# Receptor preparation (db/build_lrp1_receptor.py)
+openmm>=8.0
+pdbfixer>=1.10
+
+# Legacy small-molecule POC (KRAS G12D pipeline) — leave installed for the
+# historical demo path; not used by the peptide pipeline.
+rdkit>=2024.3.1
+admet-ai>=1.3.0
+pymoo>=0.6.1
+vina>=1.2.5
+meeko>=0.5.0

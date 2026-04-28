@@ -1,3 +1,4 @@
+import math
 import sys, traceback, threading, uuid
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +25,17 @@ jobs_lock = threading.Lock()
 optimizer = ProteinOptimizer()
 
 
+def _json_safe(value):
+    """Recursively replace non-finite floats with None for valid JSON."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def background_worker(job_id, sequence, tool_a, tool_b):
     def progress_cb(pct):
         with jobs_lock:
@@ -44,7 +56,7 @@ def background_worker(job_id, sequence, tool_a, tool_b):
         with jobs_lock:
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
-            jobs[job_id]["results"] = results
+            jobs[job_id]["results"] = _json_safe(results)
             jobs[job_id]["completed_at"] = datetime.now().isoformat()
 
     except (ToolAFailure, ToolBFailure, PipelineTimeout, Exception) as e:
@@ -83,7 +95,9 @@ def create_job():
             "params": {"sequence": sequence, "tool_a": tool_a, "tool_b": tool_b},
         }
 
-    thread = threading.Thread(target=background_worker, args=(job_id, sequence, tool_a, tool_b))
+    thread = threading.Thread(
+        target=background_worker, args=(job_id, sequence, tool_a, tool_b)
+    )
     thread.start()
 
     return jsonify({"job_id": job_id}), 202
@@ -95,7 +109,7 @@ def get_job(job_id):
         job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify(job)
+    return jsonify(_json_safe(job))
 
 
 @app.route("/api/uniprot/demo")
@@ -114,4 +128,5 @@ def serve(path):
 
 if __name__ == "__main__":
     import os
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 7860)), debug=False)

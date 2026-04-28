@@ -18,6 +18,9 @@ const formatDuration = (s: number): string => {
 const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
   const [jobData, setJobData] = useState<JobStatus | null>(null);
   const [status, setStatus] = useState<'loading' | 'pending' | 'processing' | 'completed' | 'error'>('loading');
+  const candidateRows = Array.isArray(jobData?.results?.candidates) ? jobData!.results.candidates : [];
+  const alanineRows = Array.isArray(jobData?.results?.alanine_scan) ? jobData!.results.alanine_scan : [];
+  const validStatuses = new Set(['pending', 'processing', 'completed', 'error']);
 
   useEffect(() => {
     if (!jobId) {
@@ -27,11 +30,32 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
 
     const pollStatus = async () => {
       try {
-        const data = await getJobStatus(jobId);
-        setJobData(data);
-        setStatus(data.status);
+        const data = await getJobStatus(jobId) as any;
+        if (!data || typeof data !== 'object') {
+          console.error('Malformed job payload:', data);
+          setStatus('error');
+          return true;
+        }
 
-        if (data.status === 'completed' || data.status === 'error') {
+        const nextStatus = data.status;
+        if (!validStatuses.has(nextStatus)) {
+          console.error('Unexpected job status:', nextStatus, data);
+          setJobData({ ...data, error: '後端回傳了無效的任務狀態。' } as JobStatus);
+          setStatus('error');
+          return true;
+        }
+
+        if (nextStatus === 'completed' && !data.results) {
+          console.error('Completed job missing results:', data);
+          setJobData({ ...data, error: '任務已完成，但結果資料缺失。' } as JobStatus);
+          setStatus('error');
+          return true;
+        }
+
+        setJobData(data as JobStatus);
+        setStatus(nextStatus);
+
+        if (nextStatus === 'completed' || nextStatus === 'error') {
           return true; // Stop polling
         }
       } catch (error) {
@@ -125,7 +149,11 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                   <TrendingUp className="text-green-600 w-6 h-6" />
                   <h3 className="text-xl font-semibold m-0">模擬可靠度分析 (ρ)</h3>
                 </div>
-                <div className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-bold">
+                <div className={`px-3 py-1 rounded-full text-sm font-bold ${
+                  jobData.results.reliability === 'High' ? 'bg-green-100 text-green-700' :
+                  jobData.results.reliability === 'Medium' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
                   可信度: {jobData.results.reliability}
                 </div>
               </div>
@@ -133,7 +161,9 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                 <div className="flex-1">
                   <p className="text-sm text-gray-500 mb-1">Spearman Correlation (ρ)</p>
                   <div className="text-5xl font-black text-purple-700">
-                    {jobData.results.rho >= 0 ? '+' : ''}{jobData.results.rho.toFixed(3)}
+                    {jobData.results.rho == null || isNaN(jobData.results.rho)
+                      ? '—'
+                      : `${jobData.results.rho >= 0 ? '+' : ''}${jobData.results.rho.toFixed(3)}`}
                   </div>
                 </div>
                 <div className="flex-1 text-sm text-gray-600 border-l border-gray-200 pl-8 space-y-2">
@@ -191,7 +221,7 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {jobData.results.candidates.map((row: any, idx: number) => (
+                  {candidateRows.map((row: any, idx: number) => (
                     <tr key={row.id} className="hover:bg-purple-50/30 transition-colors">
                       <td className="px-6 py-4">
                         <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${idx === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'}`}>
@@ -200,12 +230,21 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                       </td>
                       <td className="px-6 py-4 font-mono text-sm">{row.id}</td>
                       <td className="px-6 py-4">{row.mutation}</td>
-                      <td className="px-6 py-4 text-green-600 font-medium">{row.ddg}</td>
+                      <td className="px-6 py-4 text-green-600 font-medium">
+                        {row.ddg == null || isNaN(row.ddg) ? '—' : row.ddg}
+                      </td>
                       <td className="px-6 py-4">{row.immuno}</td>
                       <td className="px-6 py-4">{row.agg}</td>
                       <td className="px-6 py-4 font-bold text-purple-600">{row.j}</td>
                     </tr>
                   ))}
+                  {candidateRows.length === 0 && (
+                    <tr>
+                      <td className="px-6 py-6 text-sm text-gray-500" colSpan={7}>
+                        此組合目前沒有可顯示的候選優化結果。
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -214,7 +253,7 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
             </div>
           </section>
 
-          {Array.isArray(jobData.results.alanine_scan) && jobData.results.alanine_scan.length > 0 && (
+          {alanineRows.length > 0 && (
             <section className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                 <div className="flex items-center space-x-3">
@@ -222,7 +261,7 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                   <h3 className="text-xl font-semibold m-0">Alanine Scan 熱點分析</h3>
                 </div>
                 <span className="text-xs text-gray-500">
-                  {jobData.results.alanine_scan.some((r: any) => r.predicted_ddg !== undefined && r.mutant_dG !== undefined)
+                  {alanineRows.some((r: any) => r.predicted_ddg !== undefined && r.mutant_dG !== undefined)
                     ? '真實 Tool A + Tool B sweep'
                     : '暫用 stub 值（背景 sweep 完成後會替換）'}
                 </span>
@@ -239,15 +278,25 @@ const ResultsPage: React.FC<ResultsPageProps> = ({ jobId, onBack }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {jobData.results.alanine_scan.map((row: any) => (
+                      {alanineRows.map((row: any) => (
                       <tr key={row.position} className="hover:bg-purple-50/30 transition-colors">
                         <td className="px-6 py-3 font-mono">{row.position}</td>
                         <td className="px-6 py-3 font-mono">{row.original}</td>
                         <td className="px-6 py-3 font-mono">{row.mutant}</td>
-                        <td className={`px-6 py-3 font-medium ${row.predicted_ddg > 1.5 ? 'text-red-600' : row.predicted_ddg > 0.5 ? 'text-orange-600' : 'text-gray-700'}`}>
-                          {row.error ? <span className="text-gray-400 text-xs">{row.error}</span> : row.predicted_ddg?.toFixed?.(2) ?? row.predicted_ddg}
+                        <td className={`px-6 py-3 font-medium ${
+                          row.predicted_ddg != null && !isNaN(row.predicted_ddg)
+                            ? row.predicted_ddg > 1.5 ? 'text-red-600' : row.predicted_ddg > 0.5 ? 'text-orange-600' : 'text-gray-700'
+                            : 'text-gray-400'
+                        }`}>
+                          {row.error
+                            ? <span className="text-red-500 text-xs font-normal" title={row.error}>計算錯誤 ⚠</span>
+                            : row.predicted_ddg == null || isNaN(row.predicted_ddg)
+                              ? '—'
+                              : row.predicted_ddg.toFixed(2)}
                         </td>
-                        <td className="px-6 py-3">{row.kd_fold?.toFixed?.(2) ?? row.kd_fold ?? '-'}</td>
+                        <td className="px-6 py-3">
+                          {row.kd_fold == null || isNaN(row.kd_fold) ? '—' : row.kd_fold.toFixed(2)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

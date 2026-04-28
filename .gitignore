@@ -5,3 +5,4 @@ uniprot_cache/
 third_party/
 runs/
 .venv/
+.claude/
